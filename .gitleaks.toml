@@ -1,0 +1,43 @@
+# Gitleaks configuration for detecting hardcoded credentials
+
+title = "Gitleaks Config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "hardcoded-password"
+description = "Detect hardcoded passwords"
+regex = '''(?i)(password|passwd|pwd)\s*=\s*[^\s]+'''
+tags = ["password", "credentials"]
+
+[[rules]]
+id = "database-credentials"
+description = "Detect database credentials"
+regex = '''(?i)(data_base|database|db_name|db_user)\s*=\s*[^\s]+'''
+tags = ["database", "credentials"]
+
+[[rules]]
+id = "aws-access-key"
+description = "AWS Access Key ID"
+regex = '''AKIA[0-9A-Z]{16}'''
+tags = ["aws", "credentials"]
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API key"
+regex = '''(?i)(api[_-]?key|apikey|access[_-]?key)\s*=\s*[^\s]+'''
+tags = ["api", "credentials"]
+
+[[rules]]
+id = "django-secret-key"
+description = "Django SECRET_KEY"
+regex = '''(?i)secret_key\s*=\s*['"][^'"]+['"]'''
+tags = ["django", "credentials"]
+
+[allowlist]
+description = "Allowlist for false positives"
+paths = [
+  '''.env.example$''',
+  '''.gitleaks.toml$''',
+]
