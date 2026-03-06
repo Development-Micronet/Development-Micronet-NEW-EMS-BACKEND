@@ -36,6 +36,9 @@ class Objective(models.Model):
         Employee, related_name="managed_objectives", blank=True
     )
 
+    class Meta:
+        db_table = "employee_objective"
+
     def __str__(self):
         return self.title
 
@@ -63,6 +66,7 @@ class KeyResult(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        db_table = "employee_keyresult"
         ordering = ["-created_at"]
 
     def __str__(self):
@@ -92,6 +96,9 @@ class Question(models.Model):
     )
     question = models.TextField()
     answer_type = models.CharField(max_length=20, choices=ANSWER_TYPES)
+
+    class Meta:
+        db_table = "employee_question"
 
     def __str__(self):
         return self.question
@@ -125,6 +132,9 @@ class Meeting(models.Model):
     )
 
     mom = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "employee_meeting"
 
     def __str__(self):
         return self.title
@@ -161,11 +171,21 @@ class Feedback(models.Model):
         KeyResult, on_delete=models.SET_NULL, null=True, blank=True
     )
 
+    colleagues = models.ManyToManyField(
+        Employee, related_name="feedback360_colleagues", blank=True
+    )
+    subordinates = models.ManyToManyField(
+        Employee, related_name="feedback360_subordinates", blank=True
+    )
+
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default="not_started"
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "employee_feedback360"
 
     def __str__(self):
         return self.title
