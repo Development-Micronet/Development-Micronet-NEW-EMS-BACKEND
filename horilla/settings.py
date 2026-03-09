@@ -81,6 +81,34 @@ INSTALLED_APPS = [
     "django_apscheduler",
     "performance",
 ]
+
+# Ensure all project apps are always present in every runtime (local/prod/worker).
+# This avoids environment-dependent app loading that can cause missing migrations/tables.
+REQUIRED_PROJECT_APPS = [
+    "accessibility",
+    "horilla_audit",
+    "horilla_widgets",
+    "horilla_crumbs",
+    "horilla_documents",
+    "horilla_views",
+    "horilla_automations",
+    "auditlog",
+    "biometric",
+    "helpdesk",
+    "offboarding",
+    "horilla_backup",
+    "project",
+    "rest_framework",
+    "rest_framework_simplejwt",
+    "drf_yasg",
+    "horilla_api",
+    "geofencing",
+    "facedetection",
+]
+for app_name in REQUIRED_PROJECT_APPS:
+    if app_name not in INSTALLED_APPS:
+        INSTALLED_APPS.append(app_name)
+INSTALLED_APPS = list(dict.fromkeys(INSTALLED_APPS))
 APSCHEDULER_DATETIME_FORMAT = "N j, Y, f:s a"
 
 APSCHEDULER_RUN_NOW_TIMEOUT = 25  # Seconds

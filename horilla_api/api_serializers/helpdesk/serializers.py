@@ -30,6 +30,12 @@ class FAQCategorySerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class TagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tags
+        fields = "__all__"
+
+
 class FAQSerializer(serializers.ModelSerializer):
     category = FAQCategorySerializer(read_only=True)
     category_id = serializers.PrimaryKeyRelatedField(
@@ -86,6 +92,9 @@ class CommentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Comment
         fields = "__all__"
+        extra_kwargs = {
+            "ticket": {"read_only": True},
+        }
 
     def get_employee_id(self, obj):
         if obj.employee_id:
@@ -212,7 +221,7 @@ class TicketSerializer(serializers.ModelSerializer):
 
     def get_tags(self, obj):
         if obj.tags.exists():
-            return [{"id": tag.id, "name": tag.name} for tag in obj.tags.all()]
+            return [{"id": tag.id, "title": tag.title} for tag in obj.tags.all()]
         return []
 
     def get_raised_on_display(self, obj):

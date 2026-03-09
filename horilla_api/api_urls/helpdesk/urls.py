@@ -7,6 +7,10 @@ from django.urls import path
 from horilla_api.api_views.helpdesk.views import *
 
 urlpatterns = [
+    # Ticket assigning type options
+    path("assigning-type/", AssigningTypeAPIView.as_view()),
+    # Tag URLs
+    path("tag/", TagGetCreateAPIView.as_view()),
     # Ticket Type URLs
     path("ticket-type/", TicketTypeGetCreateAPIView.as_view()),
     path("ticket-type/<int:pk>/", TicketTypeGetUpdateDeleteAPIView.as_view()),

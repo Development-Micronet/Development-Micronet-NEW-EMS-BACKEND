@@ -14,6 +14,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from base.methods import filtersubordinates
+from base.models import Department, JobPosition
+from base.models import Tags
+from employee.models import Employee
 from helpdesk.filter import FAQCategoryFilter, FAQFilter, TicketFilter
 from helpdesk.models import (
     FAQ,
@@ -22,6 +25,7 @@ from helpdesk.models import (
     Comment,
     DepartmentManager,
     FAQCategory,
+    MANAGER_TYPES,
     Ticket,
     TicketType,
 )
@@ -32,6 +36,7 @@ from horilla_api.api_serializers.helpdesk.serializers import (
     DepartmentManagerSerializer,
     FAQCategorySerializer,
     FAQSerializer,
+    TagSerializer,
     TicketSerializer,
     TicketTypeSerializer,
 )
@@ -49,6 +54,68 @@ def object_check(cls, pk):
         return obj
     except cls.DoesNotExist:
         return None
+
+
+class AssigningTypeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        assigning_type = request.GET.get("value")
+
+        if assigning_type == "department":
+            data = [
+                {"id": obj.id, "name": obj.department}
+                for obj in Department.objects.all().order_by("department")
+            ]
+            return Response(data, status=status.HTTP_200_OK)
+
+        if assigning_type == "job_position":
+            data = [
+                {"id": obj.id, "name": obj.job_position}
+                for obj in JobPosition.objects.all().order_by("job_position")
+            ]
+            return Response(data, status=status.HTTP_200_OK)
+
+        if assigning_type == "individual":
+            data = [
+                {"id": obj.id, "name": obj.get_full_name()}
+                for obj in Employee.objects.all().order_by(
+                    "employee_first_name", "employee_last_name"
+                )
+            ]
+            return Response(data, status=status.HTTP_200_OK)
+
+        data = [
+            {"id": idx + 1, "value": value, "label": str(label)}
+            for idx, (value, label) in enumerate(MANAGER_TYPES)
+        ]
+        return Response(data, status=status.HTTP_200_OK)
+
+
+# Tag Views
+class TagGetCreateAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Handle schema generation for DRF-YASG
+        if getattr(self, "swagger_fake_view", False):
+            return Tags.objects.none()
+        return Tags.objects.all()
+
+    def get(self, request):
+        tags = self.get_queryset()
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(tags, request)
+        serializer = TagSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+    @permission_required("helpdesk.add_tag")
+    def post(self, request):
+        serializer = TagSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 # Ticket Type Views
@@ -272,9 +339,43 @@ class TicketGetCreateAPIView(APIView):
         serializer = TicketSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)
 
+    def _ticket_create_response(self, ticket):
+        try:
+            forward_to = ticket.get_raised_on()
+        except Exception:
+            forward_to = ticket.raised_on
+
+        return {
+            "Title": ticket.title,
+            "owner": ticket.employee_id.get_full_name() if ticket.employee_id else None,
+            "Ticket Type": ticket.ticket_type.title if ticket.ticket_type else None,
+            "Priority": ticket.get_priority_display(),
+            "Assigning Type": ticket.get_assigning_type_display(),
+            "Forward To": forward_to,
+            "Deadline": ticket.deadline,
+            "Status": ticket.get_status_display(),
+            "Tags": [
+                {"id": tag.id, "title": tag.title, "color": tag.color}
+                for tag in ticket.tags.all()
+            ],
+            "Attachements": [
+                {
+                    "id": attachment.id,
+                    "file": attachment.file.url if attachment.file else None,
+                    "description": attachment.description,
+                    "format": attachment.format,
+                }
+                for attachment in ticket.ticket_attachment.all()
+            ],
+        }
+
     def post(self, request):
         # Set employee_id from request user if not provided
         data = request.data.copy()
+        # Keep these fields optional on create by ignoring client payload.
+        data.pop("employee_id_write", None)
+        data.pop("assigned_to_ids", None)
+
         if (
             not data.get("employee_id_write")
             and not data.get("employee_id")
@@ -285,7 +386,7 @@ class TicketGetCreateAPIView(APIView):
         if serializer.is_valid():
             ticket = serializer.save()
             return Response(
-                TicketSerializer(ticket).data, status=status.HTTP_201_CREATED
+                self._ticket_create_response(ticket), status=status.HTTP_201_CREATED
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

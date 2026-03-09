@@ -11,7 +11,9 @@ from horilla.settings import INSTALLED_APPS
 
 REST_APPS = ["rest_framework", "rest_framework_simplejwt", "drf_yasg", "horilla_api"]
 
-INSTALLED_APPS.extend(REST_APPS)
+for app_name in REST_APPS:
+    if app_name not in INSTALLED_APPS:
+        INSTALLED_APPS.append(app_name)
 
 REST_FRAMEWORK_SETTINGS = {
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
