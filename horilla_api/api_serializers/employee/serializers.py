@@ -80,10 +80,11 @@ class WorkTypeRequestSerializer(serializers.ModelSerializer):
                     f"WorkType with id '{value}' does not exist."
                 )
         else:
-            try:
-                return WorkType.objects.get(work_type__iexact=value)
-            except WorkType.DoesNotExist:
-                raise serializers.ValidationError(f"WorkType '{value}' does not exist.")
+            work_type_name = str(value).strip()
+            if not work_type_name:
+                raise serializers.ValidationError("work_type is required.")
+            work_type, _ = WorkType.objects.get_or_create(work_type=work_type_name)
+            return work_type
 
     def create(self, validated_data):
         work_type = validated_data.pop("work_type")

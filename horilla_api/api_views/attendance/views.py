@@ -349,21 +349,6 @@ class ClockInAPIView(APIView):
             resumed_clock_in_datetime = datetime_now
             resumed_clock_in_date = date_today
 
-            last_closed_activity = (
-                AttendanceActivity.objects.filter(
-                    employee_id=employee,
-                    attendance_date=date_today,
-                    clock_out__isnull=False,
-                    clock_out_date__isnull=False,
-                )
-                .order_by("-out_datetime", "-id")
-                .first()
-            )
-            if last_closed_activity and last_closed_activity.out_datetime:
-                resumed_clock_in = last_closed_activity.clock_out
-                resumed_clock_in_datetime = last_closed_activity.out_datetime
-                resumed_clock_in_date = last_closed_activity.clock_out_date
-
             # 1. Create Activity (This triggers the model's save() logic)
             activity = AttendanceActivity.objects.create(
                 employee_id=employee,
@@ -1454,7 +1439,7 @@ class CheckingStatus(APIView):
         status = False
         clock_in_time = None
 
-        today = datetime.now()
+        today = datetime.now().date()
         attendance_activity_first = (
             AttendanceActivity.objects.filter(
                 employee_id=request.user.employee_get, clock_in_date=today
@@ -1659,7 +1644,6 @@ class AttendanceWorkRecordsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        print("hello")
         user = request.user
         qs = Attendance.objects.all()
         month = request.GET.get("month")
@@ -1671,11 +1655,16 @@ class AttendanceWorkRecordsAPIView(APIView):
         if month:
             try:
                 year, month_num = map(int, month.split("-"))
+                if month_num < 1 or month_num > 12:
+                    raise ValueError("month out of range")
                 qs = qs.filter(
                     attendance_date__year=year, attendance_date__month=month_num
                 )
             except Exception:
-                pass
+                return Response(
+                    {"error": "Invalid month format. Use YYYY-MM (e.g., 2026-03)."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         qs = qs.order_by("-attendance_date")
         serializer = UserAttendanceDetailedSerializer(qs, many=True)
         return Response(serializer.data)

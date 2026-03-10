@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Payslip</title>
+    <style>
+        body { font-family: Arial, sans-serif; font-size: 12px; color: #222; }
+        .container { width: 100%; max-width: 900px; margin: 0 auto; }
+        h1 { margin: 0 0 8px; font-size: 22px; }
+        .muted { color: #666; margin-bottom: 16px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #d9d9d9; padding: 8px; text-align: left; }
+        th { background: #f5f5f5; width: 34%; }
+        .section-title { margin-top: 16px; font-size: 14px; font-weight: bold; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Payslip</h1>
+    <div class="muted">Generated at: {{ payslip.generated_at }}</div>
+
+    <div class="section-title">Employee</div>
+    <table>
+        <tr><th>Name</th><td>{{ employee.get_full_name }}</td></tr>
+        <tr><th>Period</th><td>{{ payslip.start_date }} to {{ payslip.end_date }}</td></tr>
+        <tr><th>Status</th><td>{{ payslip.get_status_display }}</td></tr>
+    </table>
+
+    <div class="section-title">Work Snapshot</div>
+    <table>
+        <tr><th>Department</th><td>{{ payslip.department }}</td></tr>
+        <tr><th>Job Position</th><td>{{ payslip.job_position }}</td></tr>
+        <tr><th>Job Role</th><td>{{ payslip.job_role }}</td></tr>
+        <tr><th>Shift</th><td>{{ payslip.shift }}</td></tr>
+        <tr><th>Work Type</th><td>{{ payslip.work_type }}</td></tr>
+        <tr><th>Basic Salary</th><td>{{ currency }} {{ payslip.basic_salary }}</td></tr>
+    </table>
+
+    <div class="section-title">Bank Snapshot</div>
+    <table>
+        <tr><th>Bank Name</th><td>{{ payslip.bank_name|default:"-" }}</td></tr>
+        <tr><th>Account Number</th><td>{{ payslip.account_number|default:"-" }}</td></tr>
+        <tr><th>IFSC Code</th><td>{{ payslip.ifsc_code|default:"-" }}</td></tr>
+    </table>
+</div>
+</body>
+</html>

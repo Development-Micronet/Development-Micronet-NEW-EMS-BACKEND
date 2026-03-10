@@ -4,6 +4,7 @@ from horilla_api.api_views.offboarding.views import (
     ExitProcessAPIView,
     OffboardingAPIView,
     OffboardingEmployeeAPIView,
+    ResignationRequestAPIView,
     OffboardingStageAPIView,
 )
 
@@ -43,5 +44,15 @@ urlpatterns = [
         "stages/<int:pk>/",
         OffboardingStageAPIView.as_view(),
         name="offboarding-stage-detail",
+    ),
+    path(
+        "resignation-requests/",
+        ResignationRequestAPIView.as_view(),
+        name="offboarding-resignation-request-list",
+    ),
+    path(
+        "resignation-requests/<int:pk>/",
+        ResignationRequestAPIView.as_view(),
+        name="offboarding-resignation-request-detail",
     ),
 ]

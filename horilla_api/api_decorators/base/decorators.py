@@ -1,6 +1,7 @@
 from functools import wraps
 
 from django.contrib import messages
+from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpResponse
 from django.shortcuts import render
 from rest_framework import status
@@ -13,6 +14,13 @@ from horilla.horilla_middlewares import _thread_locals
 from horilla_views.cbv_methods import decorator_with_arguments
 
 
+def _get_user_employee(user):
+    try:
+        return user.employee_get
+    except (AttributeError, ObjectDoesNotExist):
+        return None
+
+
 class ManagerPermission(BasePermission):
     leave_perm = [
         "leave.view_leaverequest",
@@ -22,7 +30,11 @@ class ManagerPermission(BasePermission):
 
     def has_permission(self, request, perm):
         user = request.user
-        employee = user.employee_get
+        if getattr(user, "is_superuser", False):
+            return True
+        employee = _get_user_employee(user)
+        if employee is None:
+            return False
         if perm in self.leave_perm:
             is_approval_manager = MultipleApprovalManagers.objects.filter(
                 employee_id=employee.id
@@ -69,11 +81,21 @@ def manager_or_owner_permission_required(model_class, perm):
     def decorator(func):
         @wraps(func)
         def wrapper(self, request, pk=None, *args, **kwargs):
+            if getattr(request.user, "is_superuser", False):
+                if pk:
+                    return func(self, request, pk, *args, **kwargs)
+                return func(self, request, *args, **kwargs)
+            request_employee = _get_user_employee(request.user)
+            if request_employee is None:
+                return Response(
+                    {"error": "You do not have permission to perform this action."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             if pk:
                 try:
                     obj = model_class.objects.get(pk=pk)
                     # Check if the requesting user is the owner of the object
-                    if obj.employee_id == request.user.employee_get:
+                    if obj.employee_id == request_employee:
                         return func(self, request, pk, *args, **kwargs)
                 except model_class.DoesNotExist:
                     return Response(
@@ -83,7 +105,7 @@ def manager_or_owner_permission_required(model_class, perm):
             else:
                 if (
                     request.data.get("employee_id", None)
-                    == request.user.employee_get.id
+                    == request_employee.id
                 ):
                     return func(self, request, *args, **kwargs)
             # If not the owner, check for manager permission

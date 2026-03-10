@@ -43,6 +43,8 @@ from ...api_serializers.auth.serializers import (
 
 
 class LoginAPIView(APIView):
+    permission_classes = [AllowAny]
+
     @document_api(
         operation_description="Authenticate user and return JWT access token with employee info",
         request_body=LoginRequestSerializer,

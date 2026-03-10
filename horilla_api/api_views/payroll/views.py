@@ -898,24 +898,41 @@ class EmployeePayslipAdminAPIView(APIView):
             )
 
         bank_info = EmployeeBankDetails.objects.filter(employee_id=employee).first()
-
-        payslip = PayslipNew.objects.create(
-            employee=employee,
-            start_date=serializer.validated_data["start_date"],
-            end_date=serializer.validated_data["end_date"],
-            # Ã°Å¸â€Â¹ Work snapshot
-            department=work_info.Department_Name,
-            job_position=work_info.Job_Position_Name,
-            job_role=work_info.Job_Role_Name,
-            shift=work_info.Shift_Name,
-            work_type=work_info.Work_Type_Name,
-            basic_salary=work_info.Basic_Salary_Label,
-            # Ã°Å¸â€Â¹ Bank snapshot
-            bank_name=bank_info.bank_name if bank_info else None,
-            account_number=bank_info.account_number if bank_info else None,
-            ifsc_code=bank_info.any_other_code1 if bank_info else None,
-            status=serializer.validated_data["status"],
+        basic_salary = (
+            work_info.basic_salary
+            if work_info.basic_salary is not None
+            else work_info.Basic_Salary_Label
         )
+        if basic_salary is None:
+            return Response(
+                {
+                    "error": (
+                        "Employee basic salary is missing. "
+                        "Set EmployeeWorkInformation.basic_salary or "
+                        "EmployeeWorkInformation.Basic_Salary_Label first."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            payslip = PayslipNew.objects.create(
+                employee=employee,
+                start_date=serializer.validated_data["start_date"],
+                end_date=serializer.validated_data["end_date"],
+                department=work_info.Department_Name or "",
+                job_position=work_info.Job_Position_Name or "",
+                job_role=work_info.Job_Role_Name or "",
+                shift=work_info.Shift_Name or "",
+                work_type=work_info.Work_Type_Name or "",
+                basic_salary=basic_salary,
+                bank_name=bank_info.bank_name if bank_info else None,
+                account_number=bank_info.account_number if bank_info else None,
+                ifsc_code=bank_info.any_other_code1 if bank_info else None,
+                status=serializer.validated_data["status"],
+            )
+        except IntegrityError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(
             {
@@ -1004,6 +1021,69 @@ class EmployeePayslipAdminAPIView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class EmployeePayslipNewPDFAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            payslip = PayslipNew.objects.select_related("employee").get(pk=pk)
+        except PayslipNew.DoesNotExist:
+            return Response(
+                {"error": "Payslip not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not (
+            request.user.has_perm("payroll.view_payslipnew")
+            or payslip.employee.employee_user_id == request.user
+        ):
+            return Response(
+                {"detail": "You do not have permission to view this payslip."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not HAVE_PDFKIT:
+            return Response(
+                {
+                    "detail": (
+                        "PDF generation not available on server. "
+                        "Install pdfkit/wkhtmltopdf."
+                    )
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        currency = (
+            PayrollSettings.objects.first().currency_symbol
+            if PayrollSettings.objects.exists()
+            else "INR"
+        )
+        context = {
+            "payslip": payslip,
+            "employee": payslip.employee,
+            "currency": currency,
+        }
+        html = render_to_string(
+            "payroll/payslip/payslip_new_pdf.html",
+            context=context,
+            request=request,
+        )
+
+        try:
+            pdf_options = {"enable-local-file-access": None}
+            pdf_bytes = pdfkit.from_string(html, False, options=pdf_options)
+            response = HttpResponse(pdf_bytes, content_type="application/pdf")
+            response["Content-Disposition"] = (
+                f'inline; filename="payslip-new-{pk}.pdf"'
+            )
+            return response
+        except Exception as exc:
+            return Response(
+                {"detail": f"PDF generation failed: {str(exc)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 ##################################

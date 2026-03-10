@@ -1,15 +1,23 @@
+from django.core.mail import EmailMessage
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from base.backends import ConfiguredEmailBackend
 from horilla_api.api_serializers.offboarding.serializers import (
     OffboardingEmployeeSerializer,
     OffboardingManagerStatusSerializer,
     OffboardingSerializer,
     OffboardingStageSerializer,
+    ResignationRequestSerializer,
 )
-from offboarding.models import Offboarding, OffboardingEmployee, OffboardingStage
+from offboarding.models import (
+    Offboarding,
+    OffboardingEmployee,
+    OffboardingStage,
+    ResignationLetter,
+)
 
 
 class ExitProcessAPIView(APIView):
@@ -99,7 +107,10 @@ class ExitProcessAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         instance.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(
+            {"message": "Exit Process deleted successfully"},
+            status=status.HTTP_200_OK,
+        )
 
 
 class OffboardingEmployeeAPIView(APIView):
@@ -170,7 +181,10 @@ class OffboardingEmployeeAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
         instance.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(
+            {"message": "Offboarding employee deleted successfully"},
+            status=status.HTTP_200_OK,
+        )
 
 
 class OffboardingAPIView(APIView):
@@ -362,3 +376,105 @@ class OffboardingStageAPIView(APIView):
             )
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ResignationRequestAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _send_resignation_mail(self, instance, action):
+        recipient = getattr(instance.employee_id, "email", None)
+        if not recipient:
+            return
+        try:
+            email_backend = ConfiguredEmailBackend()
+            from_email = getattr(
+                email_backend, "dynamic_from_email_with_display_name", None
+            )
+            subject = f"Resignation Request {action}"
+            body = (
+                f"Employee: {instance.employee_id.get_full_name()}\n"
+                f"Title: {instance.title}\n"
+                f"Description: {instance.description}\n"
+                f"Planned To Leave On: {instance.planned_to_leave_on}\n"
+                f"Status: {instance.status.capitalize()}\n"
+            )
+            EmailMessage(
+                subject=subject,
+                body=body,
+                from_email=from_email,
+                to=[recipient],
+                connection=email_backend,
+            ).send(fail_silently=True)
+        except Exception:
+            pass
+
+    def get(self, request, pk=None):
+        if pk:
+            try:
+                instance = ResignationLetter.objects.get(pk=pk)
+            except ResignationLetter.DoesNotExist:
+                return Response(
+                    {"error": "Resignation request does not exist."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            return Response(
+                ResignationRequestSerializer(instance).data,
+                status=status.HTTP_200_OK,
+            )
+
+        queryset = ResignationLetter.objects.select_related("employee_id").order_by("-id")
+        serializer = ResignationRequestSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = ResignationRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        self._send_resignation_mail(instance, "Created")
+        return Response(
+            ResignationRequestSerializer(instance).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def put(self, request, pk=None):
+        if not pk:
+            return Response(
+                {"error": "Resignation request ID is required for update."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            instance = ResignationLetter.objects.get(pk=pk)
+        except ResignationLetter.DoesNotExist:
+            return Response(
+                {"error": "Resignation request does not exist."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        old_status = instance.status
+        serializer = ResignationRequestSerializer(instance, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        updated = serializer.save()
+        if updated.status != old_status:
+            self._send_resignation_mail(updated, "Status Updated")
+        return Response(
+            ResignationRequestSerializer(updated).data,
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, pk=None):
+        if not pk:
+            return Response(
+                {"error": "Resignation request ID is required for delete."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            instance = ResignationLetter.objects.get(pk=pk)
+        except ResignationLetter.DoesNotExist:
+            return Response(
+                {"error": "Resignation request does not exist."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        instance.delete()
+        return Response(
+            {"message": "Resignation request deleted successfully"},
+            status=status.HTTP_200_OK,
+        )

@@ -13,6 +13,7 @@ urlpatterns = [
     ############### payslip api admin bro
     path("payslips/", EmployeePayslipAdminAPIView.as_view()),
     path("payslips/<int:pk>/", EmployeePayslipAdminAPIView.as_view()),
+    path("payslips/<int:pk>/download/", EmployeePayslipNewPDFAPIView.as_view()),
     ############### contract api
     path(
         "contracts/",

@@ -13,14 +13,18 @@ from base.models import (
     WorkType,
 )
 from employee.models import Employee, EmployeeWorkInformation
-from offboarding.models import Offboarding, OffboardingEmployee, OffboardingStage
+from offboarding.models import (
+    Offboarding,
+    OffboardingEmployee,
+    OffboardingStage,
+    ResignationLetter,
+)
 
 
 class OffboardingSerializer(serializers.ModelSerializer):
     company = serializers.PrimaryKeyRelatedField(
         source="company_id", queryset=Company.objects.all(), required=False
     )
-    company_name = serializers.CharField(source="company_id.company", read_only=True)
     managers = serializers.PrimaryKeyRelatedField(
         queryset=Employee.objects.all(), many=True, required=False
     )
@@ -39,7 +43,6 @@ class OffboardingSerializer(serializers.ModelSerializer):
             "manager_users",
             "status",
             "company",
-            "company_name",
         ]
         extra_kwargs = {
             "title": {"required": False, "allow_blank": True},
@@ -118,6 +121,25 @@ class OffboardingSerializer(serializers.ModelSerializer):
             instance.managers.set(managers)
         return instance
 
+    def to_representation(self, instance):
+        return {
+            "title": instance.title,
+            "description": instance.description,
+            "managers": [
+                {"id": manager.id, "name": manager.get_full_name()}
+                for manager in instance.managers.all()
+            ],
+            "status": instance.status,
+            "company": (
+                {
+                    "id": instance.company_id.id,
+                    "company": instance.company_id.company,
+                }
+                if instance.company_id
+                else None
+            ),
+        }
+
 
 class OffboardingEmployeeSerializer(serializers.ModelSerializer):
     employee = serializers.PrimaryKeyRelatedField(
@@ -144,10 +166,10 @@ class OffboardingEmployeeSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "employee",
-            "offboarding",
             "stage",
             "notice_period_starts",
             "notice_period_ends",
+            "offboarding",
             "department",
             "job_position",
             "job_role",
@@ -352,37 +374,33 @@ class OffboardingEmployeeSerializer(serializers.ModelSerializer):
         return instance
 
     def to_representation(self, instance):
-        data = super().to_representation(instance)
-        work_info = getattr(instance.employee_id, "employee_work_info", None)
-        data["department"] = getattr(
-            getattr(work_info, "department_id", None), "id", None
-        )
-        data["job_position"] = getattr(
-            getattr(work_info, "job_position_id", None), "id", None
-        )
-        data["job_role"] = getattr(getattr(work_info, "job_role_id", None), "id", None)
-        data["employee_type"] = getattr(
-            getattr(work_info, "employee_type_id", None), "id", None
-        )
-        data["shift"] = getattr(getattr(work_info, "shift_id", None), "id", None)
-        data["work_type"] = getattr(
-            getattr(work_info, "work_type_id", None), "id", None
-        )
-        data["offboarding"] = (
-            instance.stage_id.offboarding_id_id if instance.stage_id else None
-        )
-        return data
+        return {
+            "employee": {
+                "id": instance.employee_id.id,
+                "name": instance.employee_id.get_full_name(),
+            }
+            if instance.employee_id
+            else None,
+            "stage": {
+                "id": instance.stage_id.id,
+                "title": instance.stage_id.title,
+            }
+            if instance.stage_id
+            else None,
+            "notice_period_starts": instance.notice_period_starts,
+            "notice_period_ends": instance.notice_period_ends,
+        }
 
 
 class OffboardingStageSerializer(serializers.ModelSerializer):
     offboarding = serializers.PrimaryKeyRelatedField(
         source="offboarding_id", queryset=Offboarding.objects.all()
     )
-    status = serializers.CharField(source="type")
+    type = serializers.CharField()
 
     class Meta:
         model = OffboardingStage
-        fields = ["id", "offboarding", "status", "title", "managers", "sequence"]
+        fields = ["id", "offboarding", "type", "title", "managers", "sequence"]
         read_only_fields = ["sequence"]
 
     def to_internal_value(self, data):
@@ -392,7 +410,8 @@ class OffboardingStageSerializer(serializers.ModelSerializer):
             mutable = dict(data)
         aliases = {
             "Offboarding": "offboarding",
-            "Status": "status",
+            "Status": "type",
+            "Type": "type",
             "Title": "title",
             "Managers": "managers",
         }
@@ -440,6 +459,17 @@ class OffboardingStageSerializer(serializers.ModelSerializer):
         if "type" in validated_data and "title" not in validated_data:
             validated_data["title"] = self._default_title(validated_data["type"])
         return super().update(instance, validated_data)
+
+    def to_representation(self, instance):
+        return {
+            "id": instance.id,
+            "title": instance.title,
+            "type": instance.get_type_display(),
+            "managers": [
+                {"id": manager.id, "name": manager.get_full_name()}
+                for manager in instance.managers.all()
+            ],
+        }
 
 
 class OffboardingManagerStatusSerializer(serializers.ModelSerializer):
@@ -510,3 +540,60 @@ class OffboardingManagerStatusSerializer(serializers.ModelSerializer):
         if managers_provided:
             instance.managers.set(managers)
         return instance
+
+
+class ResignationRequestSerializer(serializers.ModelSerializer):
+    employee = serializers.PrimaryKeyRelatedField(
+        source="employee_id", queryset=Employee.objects.all()
+    )
+    status = serializers.CharField(required=False)
+
+    class Meta:
+        model = ResignationLetter
+        fields = [
+            "id",
+            "employee",
+            "title",
+            "description",
+            "planned_to_leave_on",
+            "status",
+        ]
+
+    def to_internal_value(self, data):
+        if hasattr(data, "copy"):
+            mutable = data.copy()
+        else:
+            mutable = dict(data)
+        aliases = {
+            "Employee": "employee",
+            "Title": "title",
+            "Description": "description",
+            "Planned To Leave On": "planned_to_leave_on",
+            "Status": "status",
+        }
+        for incoming, target in aliases.items():
+            if incoming in mutable and target not in mutable:
+                mutable[target] = mutable[incoming]
+        return super().to_internal_value(mutable)
+
+    def validate_status(self, value):
+        value = str(value).strip().lower()
+        if value not in {"requested", "approved", "rejected"}:
+            raise serializers.ValidationError(
+                "Status must be Requested, Approved, or Rejected."
+            )
+        return value
+
+    def to_representation(self, instance):
+        return {
+            "employee": {
+                "id": instance.employee_id.id,
+                "name": instance.employee_id.get_full_name(),
+            }
+            if instance.employee_id
+            else None,
+            "title": instance.title,
+            "description": instance.description,
+            "planned_to_leave_on": instance.planned_to_leave_on,
+            "status": instance.status.capitalize() if instance.status else None,
+        }

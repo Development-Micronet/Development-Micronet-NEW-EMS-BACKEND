@@ -7,6 +7,7 @@ class DisciplinaryActionSerializer(serializers.ModelSerializer):
     employee_names = serializers.SerializerMethodField(read_only=True)
     action_type = serializers.CharField(source="action.title", read_only=True)
     attachment_url = serializers.SerializerMethodField(read_only=True)
+    attachment = serializers.FileField(write_only=True, required=False, allow_null=True)
 
     # Accept action as string or PK
     action = serializers.CharField(write_only=True)
@@ -24,6 +25,7 @@ class DisciplinaryActionSerializer(serializers.ModelSerializer):
             "days",
             "hours",
             "start_date",
+            "attachment",
             "attachment_url",
         ]
 
@@ -43,6 +45,19 @@ class DisciplinaryActionSerializer(serializers.ModelSerializer):
         # Show action_type as the human-readable name
         rep["action_type"] = instance.action.title if instance.action else None
         return rep
+
+    def to_internal_value(self, data):
+        # Backward-compatible alias support
+        mutable = data.copy()
+        if "action" not in mutable and "action_type" in mutable:
+            mutable["action"] = mutable.get("action_type")
+
+        # Accept single employee id as well as list
+        employee_value = mutable.get("employee_id")
+        if employee_value is not None and not isinstance(employee_value, list):
+            mutable["employee_id"] = [employee_value]
+
+        return super().to_internal_value(mutable)
 
     def validate_action(self, value):
         from employee.models import Actiontype
@@ -67,10 +82,14 @@ class DisciplinaryActionSerializer(serializers.ModelSerializer):
         raise serializers.ValidationError("Invalid type for action field.")
 
     def create(self, validated_data):
+        from django.utils import timezone
+
         action_value = validated_data.pop("action", None)
         if action_value:
             validated_data["action"] = self.validate_action(action_value)
         employees = validated_data.pop("employee_id", [])
+        if not validated_data.get("start_date"):
+            validated_data["start_date"] = timezone.localdate()
         instance = DisciplinaryAction.objects.create(**validated_data)
         if employees:
             instance.employee_id.set(employees)
