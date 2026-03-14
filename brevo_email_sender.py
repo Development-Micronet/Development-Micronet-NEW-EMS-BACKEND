@@ -7,6 +7,7 @@ Uses Brevo (formerly Sendinblue) Python SDK for reliable email delivery
 import os
 import secrets
 import sys
+import base64
 
 import sib_api_v3_sdk
 from sib_api_v3_sdk.models.send_smtp_email import SendSmtpEmail
@@ -47,6 +48,7 @@ class BrevoEmailSender:
         subject: str,
         html_content: str = None,
         text_content: str = None,
+        attachments: list = None,
     ) -> tuple:
         """
         Send email using Brevo API
@@ -70,6 +72,8 @@ class BrevoEmailSender:
                 html_content=html_content,
                 text_content=text_content,
             )
+            if attachments:
+                send_smtp_email.attachment = attachments
 
             # Send email
             print(f"📧 Sending email via Brevo to {to_email}...")

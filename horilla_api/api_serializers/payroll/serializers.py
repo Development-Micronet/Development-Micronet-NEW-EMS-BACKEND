@@ -9,6 +9,7 @@ from payroll.models.models import (
     LoanAccount,
     MultipleCondition,
     Payslip,
+    PayslipNew,
     Reimbursement,
     ReimbursementMultipleAttachment,
 )
@@ -45,6 +46,132 @@ class PayslipSerializer(serializers.ModelSerializer):
             return employee_profile.url
         except:
             return None
+
+
+class PayslipNewSerializer(serializers.ModelSerializer):
+    """Serializer for the new PayslipNew model - Auto-fetches data from related tables"""
+    employee_first_name = serializers.CharField(
+        source="employee.employee_first_name", read_only=True
+    )
+    employee_last_name = serializers.CharField(
+        source="employee.employee_last_name", read_only=True
+    )
+    badge_id = serializers.CharField(source="employee.badge_id", read_only=True)
+    employee_email = serializers.CharField(
+        source="employee.employee_work_info.email", read_only=True
+    )
+    employee_profile_url = serializers.SerializerMethodField(read_only=True)
+    gross_salary = serializers.SerializerMethodField(read_only=True)
+
+    department = serializers.SerializerMethodField(read_only=True)
+    job_position = serializers.SerializerMethodField(read_only=True)
+    job_role = serializers.SerializerMethodField(read_only=True)
+    shift = serializers.SerializerMethodField(read_only=True)
+    work_type = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = PayslipNew
+        fields = [
+            "id",
+            "employee",
+            "employee_first_name",
+            "employee_last_name",
+            "badge_id",
+            "employee_email",
+            "employee_profile_url",
+            "start_date",
+            "end_date",
+            "department",
+            "job_position",
+            "job_role",
+            "shift",
+            "work_type",
+            "basic_salary",
+            "bank_name",
+            "account_number",
+            "ifsc_code",
+            "total_working_days",
+            "leaves",
+            "lop_days",
+            "paid_days",
+            "basic",
+            "hra",
+            "conveyance_allowance",
+            "medical_allowance",
+            "other_allowances",
+            "gross_wages",
+            "gross_salary",
+            "total_earnings",
+            "epf",
+            "esi",
+            "professional_tax",
+            "deduction_amount",
+            "deduction_description",
+            "total_deductions",
+            "net_salary",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        # Read-only fields: auto-fetched or auto-calculated
+        read_only_fields = [
+            "id",
+            "created_at",
+            "updated_at",
+            # Auto-fetched from EmployeeWorkInformation
+            "department",
+            "job_position",
+            "job_role",
+            "shift",
+            "work_type",
+            "basic_salary",
+            # Auto-fetched from EmployeeBankDetails
+            "bank_name",
+            "account_number",
+            "ifsc_code",
+            # Auto-calculated from LeaveRequest and working days
+            "total_working_days",
+            "leaves",
+            "paid_days",
+            # Auto-calculated totals
+            "gross_salary",
+            "total_earnings",
+            "total_deductions",
+            "net_salary",
+        ]
+
+    def get_employee_profile_url(self, obj):
+        try:
+            employee_profile = obj.employee.employee_profile
+            return employee_profile.url
+        except:
+            return None
+
+    def get_gross_salary(self, obj):
+        # alias field for ease of client
+        return obj.gross_salary
+
+    def _workinfo_value(self, obj, field):
+        try:
+            wi = obj.employee.employee_work_info
+            return getattr(wi, field, None)
+        except:
+            return None
+
+    def get_department(self, obj):
+        return obj.department or self._workinfo_value(obj, 'Department_Name')
+
+    def get_job_position(self, obj):
+        return obj.job_position or self._workinfo_value(obj, 'Job_Position_Name')
+
+    def get_job_role(self, obj):
+        return obj.job_role or self._workinfo_value(obj, 'Job_Role_Name')
+
+    def get_shift(self, obj):
+        return obj.shift or self._workinfo_value(obj, 'Shift_Name')
+
+    def get_work_type(self, obj):
+        return obj.work_type or self._workinfo_value(obj, 'Work_Type_Name')
 
 
 #######################

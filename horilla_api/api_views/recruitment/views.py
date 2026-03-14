@@ -10,6 +10,8 @@ from horilla_api.api_serializers.onboarding.serializers import (
 from horilla_api.api_serializers.recruitment.serializers import (
     RecruitmentInterviewSerializer,
     RecruitmentPipelineSerializer,
+    RecruitmentSkillZoneCandidateSerializer,
+    RecruitmentSkillZoneSerializer,
     RecruitmentStageSerializer,
     RecruitmentSurveyQuestionSerializer,
     RecruitmentSurveyTemplateSerializer,
@@ -19,6 +21,8 @@ from recruitment.models import (
     InterviewSchedule,
     Recruitment,
     RecruitmentSurvey,
+    SkillZone,
+    SkillZoneCandidate,
     Stage,
     SurveyTemplate,
 )
@@ -382,4 +386,128 @@ class RecruitmentInterviewAPIView(APIView):
         return Response(
             {"message": "Interview deleted successfully"},
             status=status.HTTP_200_OK,
+        )
+
+
+class RecruitmentSkillZoneAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = RecruitmentSkillZoneSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {
+                "message": "Skill zone created successfully",
+                "data": serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def get(self, request, pk=None):
+        queryset = SkillZone.objects.select_related("company_id").order_by("-id")
+        if pk:
+            instance = get_object_or_404(queryset, pk=pk)
+            serializer = RecruitmentSkillZoneSerializer(instance)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        serializer = RecruitmentSkillZoneSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, pk=None):
+        if not pk:
+            return Response(
+                {"error": "Skill zone ID required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        instance = get_object_or_404(SkillZone, pk=pk)
+        serializer = RecruitmentSkillZoneSerializer(
+            instance, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {
+                "message": "Skill zone updated successfully",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, pk=None):
+        if not pk:
+            return Response(
+                {"error": "Skill zone ID required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        instance = get_object_or_404(SkillZone, pk=pk)
+        instance.delete()
+        return Response(
+            {"message": "Skill zone deleted successfully"},
+            status=status.HTTP_204_NO_CONTENT,
+        )
+
+
+class RecruitmentSkillZoneCandidateAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = RecruitmentSkillZoneCandidateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {
+                "message": "Candidate added to skill zone successfully",
+                "data": serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def get(self, request, pk=None):
+        queryset = SkillZoneCandidate.objects.select_related(
+            "skill_zone_id", "candidate_id"
+        ).order_by("-id")
+        if pk:
+            instance = get_object_or_404(queryset, pk=pk)
+            serializer = RecruitmentSkillZoneCandidateSerializer(instance)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        serializer = RecruitmentSkillZoneCandidateSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, pk=None):
+        if not pk:
+            return Response(
+                {"error": "Skill zone candidate ID required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        instance = get_object_or_404(SkillZoneCandidate, pk=pk)
+        serializer = RecruitmentSkillZoneCandidateSerializer(
+            instance, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {
+                "message": "Skill zone candidate updated successfully",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, pk=None):
+        if not pk:
+            return Response(
+                {"error": "Skill zone candidate ID required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        instance = get_object_or_404(SkillZoneCandidate, pk=pk)
+        instance.delete()
+        return Response(
+            {"message": "Skill zone candidate deleted successfully"},
+            status=status.HTTP_204_NO_CONTENT,
         )

@@ -4,10 +4,13 @@ from rest_framework import serializers
 from base.models import Company, Department, JobPosition
 from employee.models import Employee
 from recruitment.models import (
+    Candidate,
     InterviewSchedule,
     Recruitment,
     RecruitmentSurvey,
     Skill,
+    SkillZone,
+    SkillZoneCandidate,
     Stage,
     SurveyTemplate,
 )
@@ -737,3 +740,88 @@ class RecruitmentInterviewSerializer(serializers.ModelSerializer):
         data["candidate"] = data.pop("candidate_data")
         data["interviewers"] = data.pop("interviewers_data")
         return data
+
+
+class RecruitmentSkillZoneSerializer(serializers.ModelSerializer):
+    skill_zone = serializers.CharField(source="title")
+    company = serializers.PrimaryKeyRelatedField(
+        source="company_id", queryset=Company.objects.all(), write_only=True
+    )
+
+    class Meta:
+        model = SkillZone
+        fields = [
+            "id",
+            "skill_zone",
+            "description",
+            "company",
+        ]
+
+    def to_representation(self, instance):
+        return {
+            "id": instance.id,
+            "Skill Zone": instance.title,
+            "Description": instance.description,
+            "Company": getattr(instance.company_id, "company", None),
+        }
+
+
+class RecruitmentSkillZoneCandidateSerializer(serializers.ModelSerializer):
+    skill_zone = serializers.PrimaryKeyRelatedField(
+        source="skill_zone_id", queryset=SkillZone.objects.all()
+    )
+    candidate = serializers.PrimaryKeyRelatedField(
+        source="candidate_id", queryset=Candidate.objects.all()
+    )
+
+    class Meta:
+        model = SkillZoneCandidate
+        fields = [
+            "id",
+            "skill_zone",
+            "candidate",
+            "reason",
+            "added_on",
+        ]
+        read_only_fields = ["added_on"]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        skill_zone = attrs.get(
+            "skill_zone_id",
+            getattr(self.instance, "skill_zone_id", None),
+        )
+        candidate = attrs.get(
+            "candidate_id",
+            getattr(self.instance, "candidate_id", None),
+        )
+
+        if skill_zone and candidate:
+            queryset = SkillZoneCandidate.objects.filter(
+                skill_zone_id=skill_zone,
+                candidate_id=candidate,
+            )
+            if self.instance:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            if queryset.exists():
+                raise serializers.ValidationError(
+                    {
+                        "candidate": "This candidate already exists in this skill zone."
+                    }
+                )
+        return attrs
+
+    def to_representation(self, instance):
+        return {
+            "id": instance.id,
+            "skill_zone": {
+                "id": getattr(instance.skill_zone_id, "id", None),
+                "title": getattr(instance.skill_zone_id, "title", None),
+            },
+            "candidate": {
+                "id": getattr(instance.candidate_id, "id", None),
+                "name": getattr(instance.candidate_id, "name", None),
+            },
+            "reason": instance.reason,
+            "added_on": instance.added_on,
+        }

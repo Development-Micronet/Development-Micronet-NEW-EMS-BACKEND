@@ -1,4 +1,5 @@
 from rest_framework import status
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -11,6 +12,7 @@ from recruitment.models import Candidate
 
 class OnboardingCandidateAPIView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def get(self, request, pk=None):
         if pk:
@@ -27,17 +29,21 @@ class OnboardingCandidateAPIView(APIView):
         candidates = Candidate.objects.filter(
             hired=True, recruitment_id__closed=False, is_active=True
         ).order_by("id")
-        serializer = OnboardingCandidateSerializer(candidates, many=True)
+        serializer = OnboardingCandidateSerializer(
+            candidates, many=True, context={"request": request}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
-        serializer = OnboardingCandidateSerializer(data=request.data)
+        serializer = OnboardingCandidateSerializer(
+            data=request.data, context={"request": request}
+        )
         if serializer.is_valid():
             candidate = serializer.save(hired=True)
-            return Response(
-                OnboardingCandidateSerializer(candidate).data,
-                status=status.HTTP_201_CREATED,
+            response_serializer = OnboardingCandidateSerializer(
+                candidate, context={"request": request}
             )
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request, pk=None):
@@ -54,12 +60,15 @@ class OnboardingCandidateAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        serializer = OnboardingCandidateSerializer(candidate, data=request.data)
+        serializer = OnboardingCandidateSerializer(
+            candidate, data=request.data, context={"request": request}
+        )
         if serializer.is_valid():
             updated = serializer.save()
-            return Response(
-                OnboardingCandidateSerializer(updated).data, status=status.HTTP_200_OK
+            response_serializer = OnboardingCandidateSerializer(
+                updated, context={"request": request}
             )
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def patch(self, request, pk=None):
@@ -77,13 +86,14 @@ class OnboardingCandidateAPIView(APIView):
             )
 
         serializer = OnboardingCandidateSerializer(
-            candidate, data=request.data, partial=True
+            candidate, data=request.data, partial=True, context={"request": request}
         )
         if serializer.is_valid():
             updated = serializer.save()
-            return Response(
-                OnboardingCandidateSerializer(updated).data, status=status.HTTP_200_OK
+            response_serializer = OnboardingCandidateSerializer(
+                updated, context={"request": request}
             )
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk=None):

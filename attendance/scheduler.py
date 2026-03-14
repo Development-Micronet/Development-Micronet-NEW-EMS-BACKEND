@@ -6,6 +6,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from django.conf import settings
 from django.utils import timezone
 
+from attendance.methods.utils import Request
 from base.backends import logger
 
 
@@ -62,47 +63,52 @@ def _parse_auto_checkout_time():
 
 
 def auto_checkout_employees():
-    from attendance.models import Attendance, AttendanceActivity
+    from attendance.models import Attendance
+    from attendance.views.clock_in_out import clock_out
 
     now_local = timezone.localtime(timezone.now())
     checkout_time = _parse_auto_checkout_time()
-    if now_local.time() < checkout_time:
-        return
-
-    today = now_local.date()
-    open_attendances = Attendance.objects.filter(
-        attendance_date=today,
-        attendance_clock_in__isnull=False,
-        attendance_clock_out__isnull=True,
-    ).select_related("employee_id")
+    open_attendances = (
+        Attendance.objects.filter(
+            attendance_clock_in__isnull=False,
+            attendance_clock_out__isnull=True,
+        )
+        .select_related("employee_id", "employee_id__employee_user_id", "attendance_day")
+        .order_by("attendance_date", "id")
+    )
 
     for attendance in open_attendances:
-        open_activity = (
-            AttendanceActivity.objects.filter(
-                employee_id=attendance.employee_id,
-                attendance_date=today,
-                clock_out__isnull=True,
-            )
-            .order_by("-in_datetime")
-            .first()
+        employee = getattr(attendance, "employee_id", None)
+        user = getattr(employee, "employee_user_id", None)
+        if not employee or not user:
+            continue
+
+        auto_checkout_date = attendance.attendance_date
+        if attendance.is_night_shift():
+            auto_checkout_date += datetime.timedelta(days=1)
+
+        cutoff_datetime = timezone.make_aware(
+            datetime.datetime.combine(auto_checkout_date, checkout_time),
+            timezone.get_current_timezone(),
         )
+        if now_local < cutoff_datetime:
+            continue
 
-        if open_activity:
-            open_activity.clock_out = now_local.time()
-            open_activity.clock_out_date = today
-            open_activity.out_datetime = now_local
-            open_activity.save()
-
-        attendance.attendance_clock_out = now_local.time()
-        attendance.attendance_clock_out_date = today
-        attendance.is_active = False
-        if open_activity is not None:
-            attendance.is_early_out = open_activity.is_early_out
-        attendance.save()
-
-        if attendance.employee_id:
-            attendance.employee_id.is_active = False
-            attendance.employee_id.save(update_fields=["is_active"])
+        try:
+            clock_out(
+                Request(
+                    user=user,
+                    date=auto_checkout_date,
+                    time=checkout_time,
+                    datetime=cutoff_datetime,
+                )
+            )
+        except Exception as exc:
+            logger.exception(
+                "Auto checkout failed for attendance %s: %s",
+                attendance.pk,
+                exc,
+            )
 
 
 if not any(

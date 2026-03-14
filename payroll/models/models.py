@@ -2016,7 +2016,11 @@ from django.utils import timezone
 from employee.models import Employee
 
 
-class PayslipNew(models.Model):
+class PayslipNew(HorillaModel):
+    """
+    PayslipNew Model - Complete payslip structure with all required fields
+    Includes earnings, deductions, working days, and bank information
+    """
 
     STATUS_CHOICES = [
         ("inprocess", "In Process"),
@@ -2032,29 +2036,205 @@ class PayslipNew(models.Model):
     end_date = models.DateField()
 
     # 🔹 Snapshot from Work Info
-    department = models.CharField(max_length=150)
-    job_position = models.CharField(max_length=150)
-    job_role = models.CharField(max_length=150)
-    shift = models.CharField(max_length=150)
-    work_type = models.CharField(max_length=150)
-    basic_salary = models.DecimalField(max_digits=12, decimal_places=2)
+    department = models.CharField(max_length=150, null=True, blank=True)
+    job_position = models.CharField(max_length=150, null=True, blank=True)
+    job_role = models.CharField(max_length=150, null=True, blank=True)
+    shift = models.CharField(max_length=150, null=True, blank=True)
+    work_type = models.CharField(max_length=150, null=True, blank=True)
+    basic_salary = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     # 🔹 Snapshot from Bank Info
     bank_name = models.CharField(max_length=150, null=True, blank=True)
     account_number = models.CharField(max_length=50, null=True, blank=True)
     ifsc_code = models.CharField(max_length=30, null=True, blank=True)
 
+    # 🔹 Attendance & Working Days
+    total_working_days = models.IntegerField(default=0)
+    leaves = models.IntegerField(default=0)
+    lop_days = models.IntegerField(default=0)
+    paid_days = models.IntegerField(default=0)
+
+    # 🔹 Gross Wages
+    gross_wages = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # 🔹 Earnings
+    basic = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    hra = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    conveyance_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    medical_allowance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    other_allowances = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_earnings = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # 🔹 Deductions
+    epf = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    esi = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    professional_tax = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_deductions = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # 🔹 Net Salary
+    net_salary = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # 🔹 Manual Deduction Info
+    deduction_amount = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True, default=0,
+        help_text="Amount explicitly deducted (passed in payload)"
+    )
+    deduction_description = models.CharField(
+        max_length=255, null=True, blank=True,
+        help_text="Description for the deduction"
+    )
+
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default="inprocess"
     )
 
-    generated_at = models.DateTimeField(default=timezone.now)
-
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = HorillaCompanyManager("employee__employee_work_info__company_id")
 
     class Meta:
-        ordering = ["-generated_at"]
+        ordering = ["-created_at"]
+        verbose_name = "Payslip New"
+        verbose_name_plural = "Payslips New"
         unique_together = ["employee", "start_date", "end_date"]
 
     def __str__(self):
-        return f"Payslip - {self.employee} ({self.start_date} to {self.end_date})"
+        return f"Payslip - {self.employee.employee_first_name} ({self.start_date} to {self.end_date})"
+
+    @property
+    def gross_salary(self):
+        """Alias for gross_wages to satisfy API naming"""
+        return self.gross_wages
+
+    def get_approved_leaves_count(self):
+        """Calculate approved leaves for the given period from LeaveNew table"""
+        try:
+            # LeaveNew replaces earlier LeaveRequest
+            from leave.models import LeaveNew
+            leaves = LeaveNew.objects.filter(
+                employee=self.employee,
+                start_date__lte=self.end_date,
+                end_date__gte=self.start_date,
+                leave_status="approved"  # field name in LeaveNew
+            )
+            # Count total leave days
+            leave_count = 0
+            for leave in leaves:
+                actual_start = max(leave.start_date, self.start_date)
+                actual_end = min(leave.end_date, self.end_date)
+                leave_count += (actual_end - actual_start).days + 1
+            return leave_count
+        except Exception:
+            return 0
+
+    def get_working_days(self):
+        """Calculate total working days in the period (excluding weekends)"""
+        from datetime import timedelta
+        current = self.start_date
+        working_days = 0
+        
+        while current <= self.end_date:
+            # 5=Saturday, 6=Sunday
+            if current.weekday() < 5:
+                working_days += 1
+            current += timedelta(days=1)
+        
+        return working_days
+
+    def calculate_paid_days(self):
+        """Calculate paid days = working days - LOP days"""
+        return max(0, self.total_working_days - self.lop_days)
+
+    def calculate_totals(self):
+        """Calculate total earnings, deductions, and net salary
+        Coerce floats/strings to Decimal to avoid type errors.
+        """
+        from decimal import Decimal
+        def D(value):
+            try:
+                return Decimal(value)
+            except Exception:
+                return Decimal(0)
+
+        self.total_earnings = (
+            D(self.basic) + 
+            D(self.hra) + 
+            D(self.conveyance_allowance) + 
+            D(self.medical_allowance) + 
+            D(self.other_allowances)
+        )
+        self.total_deductions = D(self.epf) + D(self.esi) + D(self.professional_tax) + D(self.deduction_amount or 0)
+        self.net_salary = self.total_earnings - self.total_deductions
+        return self
+
+    def save(self, *args, **kwargs):
+        """Override save to automatically pull data from related tables"""
+        
+        # === AUTO-FETCH FROM EmployeeWorkInformation ===
+        try:
+            work_info = self.employee.employee_work_info
+            
+            # Always sync basic_salary to current work info value
+            # prefer numeric field, fall back to label string if set
+            if work_info.basic_salary:
+                self.basic_salary = work_info.basic_salary
+            elif getattr(work_info, 'Basic_Salary_Label', None):
+                try:
+                    self.basic_salary = float(work_info.Basic_Salary_Label)
+                except Exception:
+                    # label might be non‑numeric, ignore
+                    pass
+            
+            # Populate work info snapshot (Convert FK objects to string names)
+            if work_info.department_id:
+                self.department = str(work_info.department_id.department)
+            if work_info.job_position_id:
+                self.job_position = str(work_info.job_position_id.job_title)
+            if work_info.job_role_id:
+                self.job_role = str(work_info.job_role_id.job_role)
+            if work_info.shift_id:
+                self.shift = str(work_info.shift_id.employee_shift)
+            if work_info.work_type_id:
+                self.work_type = str(work_info.work_type_id.work_type)
+        except Exception:
+            pass
+        
+        # === AUTO-FETCH FROM EmployeeBankDetails ===
+        try:
+            from employee.models import EmployeeBankDetails
+            bank_details = EmployeeBankDetails.objects.filter(
+                employee_id=self.employee
+            ).first()
+            
+            if bank_details:
+                self.bank_name = bank_details.bank_name
+                self.account_number = bank_details.account_number
+                # IFSC code might be in any_other_code1
+                if bank_details.any_other_code1:
+                    self.ifsc_code = bank_details.any_other_code1
+        except Exception as e:
+            pass
+        
+        # === AUTO-CALCULATE WORKING DAYS & LEAVES ===
+        # Calculate total working days (excluding weekends)
+        if self.total_working_days == 0:
+            self.total_working_days = self.get_working_days()
+        
+        # Auto-fetch approved leaves from LeaveRequest table
+        if self.leaves == 0:
+            self.leaves = self.get_approved_leaves_count()
+        
+        # Calculate paid days = working days - LOP days
+        self.paid_days = self.calculate_paid_days()
+        
+        # ensure basic earnings reflect basic_salary when missing
+        if not self.basic or float(self.basic) == 0:
+            try:
+                self.basic = float(self.basic_salary)
+            except Exception:
+                pass
+        
+        # Calculate totals
+        self.calculate_totals()
+        super().save(*args, **kwargs)

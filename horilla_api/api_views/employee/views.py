@@ -1035,60 +1035,13 @@ class EmployeeWorkInformationAPIView(APIView):
                 return Response({"error": "Work information not found"}, status=404)
             serializer = EmployeeWorkInformationSerializer(work_info)
             return Response(serializer.data, status=200)
-
-    # @manager_permission_required("employee.add_employeeworkinformation")
-    # def post(self, request):
-    #     employee_id = request.data.get("employee_id")
-
-    #     if not employee_id:
-    #         return Response(
-    #             {"employee_id": "This field is required."},
-    #             status=status.HTTP_400_BAD_REQUEST
-    #         )
-
-    #     if not Employee.objects.filter(employee_user_id_id=employee_id).exists():
-    #         return Response(
-    #             {"employee_id": "Invalid employee_id. Employee does not exist."},
-    #             status=status.HTTP_400_BAD_REQUEST
-    #         )
-
-    #     # ✅ correct FK check
-
-    #     serializer = EmployeeWorkInformationSerializer(
-    #         data=request.data
-    #     )
-    #     print( serializer)
-    #     serializer.is_valid(raise_exception=True)
-    #     serializer.save(data = request.data)
-
-    #     return Response(serializer.data, status=status.HTTP_201_CREATED)
-
+ 
     @manager_permission_required("employee.change_employeeworkinformation")
-    # def put(self, request, pk=None):
-    #     # Allow update by employee_id or pk
-    #     employee_id = request.data.get('employee_id')
-    #     if employee_id:
-    #         try:
-    #             work_info = EmployeeWorkInformation.objects.get(employee_id=employee_id)
-    #         except EmployeeWorkInformation.DoesNotExist:
-    #             return Response({"error": "Work information not found for this employee_id"}, status=404)
-    #     elif pk is not None:
-    #         try:
-    #             work_info = EmployeeWorkInformation.objects.get(pk=pk)
-    #         except EmployeeWorkInformation.DoesNotExist:
-    #             return Response({"error": "Work information not found"}, status=404)
-    #     else:
-    #         return Response({"error": "employee_id or pk required"}, status=400)
-    #     serializer = EmployeeWorkInformationSerializer(
-    #         work_info, data=request.data, partial=True
-    #     )
-    #     if serializer.is_valid():
-    #         serializer.save()
-    #         return Response(serializer.data)
-    #     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
 
     def put(self, request, pk=None):
         employee_id = request.data.get("employee_id")
+        print("PUT EmployeeWorkInformation - PK:", pk, "Employee ID:", employee_id)
 
         try:
             if employee_id:

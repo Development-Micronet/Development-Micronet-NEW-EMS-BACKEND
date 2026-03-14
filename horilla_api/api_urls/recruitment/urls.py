@@ -4,6 +4,8 @@ from horilla_api.api_views.recruitment.views import (
     RecruitmentCandidateAPIView,
     RecruitmentInterviewAPIView,
     RecruitmentPipelineAPIView,
+    RecruitmentSkillZoneCandidateAPIView,
+    RecruitmentSkillZoneAPIView,
     RecruitmentStageAPIView,
     RecruitmentSurveyQuestionAPIView,
     RecruitmentSurveyTemplateAPIView,
@@ -67,5 +69,25 @@ urlpatterns = [
         "survey-questions/<int:pk>/",
         RecruitmentSurveyQuestionAPIView.as_view(),
         name="recruitment-survey-question-detail",
+    ),
+    path(
+        "skill-zones/",
+        RecruitmentSkillZoneAPIView.as_view(),
+        name="recruitment-skill-zone-list",
+    ),
+    path(
+        "skill-zones/<int:pk>/",
+        RecruitmentSkillZoneAPIView.as_view(),
+        name="recruitment-skill-zone-detail",
+    ),
+    path(
+        "skill-zone-candidates/",
+        RecruitmentSkillZoneCandidateAPIView.as_view(),
+        name="recruitment-skill-zone-candidate-list",
+    ),
+    path(
+        "skill-zone-candidates/<int:pk>/",
+        RecruitmentSkillZoneCandidateAPIView.as_view(),
+        name="recruitment-skill-zone-candidate-detail",
     ),
 ]

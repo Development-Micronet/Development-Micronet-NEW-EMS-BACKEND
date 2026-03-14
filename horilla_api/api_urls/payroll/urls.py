@@ -3,17 +3,22 @@ from django.urls import path
 from ...api_views.payroll.views import *
 from ...api_views.payroll.views import (
     EmployeeContractAdminAPIView,
-    EmployeePayslipAdminAPIView,
     EmployeePayslipAPIView,
+    EmployeePayslipNewPDFAPIView,
+    PayslipNewView,
 )
 
 urlpatterns = [
     # payslip api employee bro
     path("employee-payslips/", EmployeePayslipAPIView.as_view()),
     ############### payslip api admin bro
-    path("payslips/", EmployeePayslipAdminAPIView.as_view()),
-    path("payslips/<int:pk>/", EmployeePayslipAdminAPIView.as_view()),
+    # path("payslips/", EmployeePayslipAdminAPIView.as_view()),
+    # path("payslips/<int:pk>/", EmployeePayslipAdminAPIView.as_view()),
     path("payslips/<int:pk>/download/", EmployeePayslipNewPDFAPIView.as_view()),
+
+    ############### new payslip api (PayslipNew model)
+    path("payslips/", PayslipNewView.as_view(), name="payslip-new-list"),
+    path("payslips/<int:id>/", PayslipNewView.as_view(), name="payslip-new-detail"),
     ############### contract api
     path(
         "contracts/",

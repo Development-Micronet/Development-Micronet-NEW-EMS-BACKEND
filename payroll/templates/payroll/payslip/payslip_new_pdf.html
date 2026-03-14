@@ -1,47 +1,489 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Payslip</title>
-    <style>
-        body { font-family: Arial, sans-serif; font-size: 12px; color: #222; }
-        .container { width: 100%; max-width: 900px; margin: 0 auto; }
-        h1 { margin: 0 0 8px; font-size: 22px; }
-        .muted { color: #666; margin-bottom: 16px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th, td { border: 1px solid #d9d9d9; padding: 8px; text-align: left; }
-        th { background: #f5f5f5; width: 34%; }
-        .section-title { margin-top: 16px; font-size: 14px; font-weight: bold; }
-    </style>
+<meta charset="UTF-8">
+<title>Payslip</title>
+
+<style>
+
+@page{
+    size:A4;
+    margin:12px;
+}
+
+body{
+    font-family: Arial, Helvetica, sans-serif;
+    font-size:11px;
+    color:#2c3e50;
+    background:#ffffff;
+}
+
+.container{
+    border:1px solid #dfe6ee;
+    padding:12px;
+    page-break-inside: avoid;
+}
+
+/* HEADER */
+
+.header-table{
+    width:100%;
+    border-collapse:collapse;
+    border-bottom:2px solid #2f6fad;
+    margin-bottom:6px;
+}
+
+.header-table td{
+    border:none;
+}
+
+.logo{
+    height:60px;
+    width:auto;
+    vertical-align:middle;
+}
+
+.company-wrap{
+    border-collapse:collapse;
+}
+
+.company-wrap td{
+    border:none;
+    padding:0;
+    vertical-align:middle;
+}
+
+.company-text{
+    padding-left:8px;
+}
+
+.company-name{
+    font-size:24px;
+    font-weight:bold;
+    color:#2f6fad;
+}
+
+.payslip-title{
+    text-align:right;
+}
+
+.payslip-title h2{
+    margin:0;
+    font-size:16px;
+    color:#2f6fad;
+}
+
+.period{
+    font-size:11px;
+    color:#6b7b8c;
+}
+
+/* SECTIONS */
+
+.section{
+    margin-top:10px;
+    page-break-inside: avoid;
+}
+
+.section-title{
+    background:#eef3f9;
+    border:1px solid #dfe6ee;
+    padding:5px 8px;
+    font-weight:bold;
+    color:#2f6fad;
+}
+
+/* TABLE */
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    page-break-inside: avoid;
+}
+
+th,td{
+    border:1px solid #dfe6ee;
+    padding:4px 6px;
+}
+
+th{
+    background:#f7f9fc;
+    font-size:10px;
+    text-transform:uppercase;
+    color:#5b6b7b;
+}
+
+.label{
+    width:40%;
+    font-weight:bold;
+    color:#566573;
+}
+
+.amount{
+    text-align:right;
+}
+
+/* TWO COLUMN */
+
+.two-col{
+    width:100%;
+    margin-top:10px;
+}
+
+.two-col td{
+    width:50%;
+    vertical-align:top;
+}
+
+.left-box{
+    padding-right:6px;
+}
+
+.right-box{
+    padding-left:6px;
+}
+
+/* NET SALARY */
+
+.net-salary{
+    margin-top:12px;
+    border:2px solid #2f6fad;
+    background:#f2f7fd;
+    text-align:center;
+    padding:8px;
+}
+
+.net-label{
+    font-size:11px;
+    color:#5b6b7b;
+}
+
+.net-amount{
+    font-size:20px;
+    font-weight:bold;
+    color:#1e8449;
+}
+
+/* FOOTER */
+
+.footer{
+    margin-top:15px;
+}
+
+.footer-table{
+    width:100%;
+}
+
+.footer-table td{
+    border:none;
+}
+
+.note{
+    font-size:10px;
+    color:#6b7b8c;
+}
+
+.stamp{
+    text-align:right;
+}
+
+.stamp img{
+    width:90px;
+}
+
+</style>
+
 </head>
+
 <body>
+
 <div class="container">
-    <h1>Payslip</h1>
-    <div class="muted">Generated at: {{ payslip.generated_at }}</div>
 
-    <div class="section-title">Employee</div>
-    <table>
-        <tr><th>Name</th><td>{{ employee.get_full_name }}</td></tr>
-        <tr><th>Period</th><td>{{ payslip.start_date }} to {{ payslip.end_date }}</td></tr>
-        <tr><th>Status</th><td>{{ payslip.get_status_display }}</td></tr>
-    </table>
+<!-- HEADER -->
 
-    <div class="section-title">Work Snapshot</div>
-    <table>
-        <tr><th>Department</th><td>{{ payslip.department }}</td></tr>
-        <tr><th>Job Position</th><td>{{ payslip.job_position }}</td></tr>
-        <tr><th>Job Role</th><td>{{ payslip.job_role }}</td></tr>
-        <tr><th>Shift</th><td>{{ payslip.shift }}</td></tr>
-        <tr><th>Work Type</th><td>{{ payslip.work_type }}</td></tr>
-        <tr><th>Basic Salary</th><td>{{ currency }} {{ payslip.basic_salary }}</td></tr>
-    </table>
+<table class="header-table">
 
-    <div class="section-title">Bank Snapshot</div>
-    <table>
-        <tr><th>Bank Name</th><td>{{ payslip.bank_name|default:"-" }}</td></tr>
-        <tr><th>Account Number</th><td>{{ payslip.account_number|default:"-" }}</td></tr>
-        <tr><th>IFSC Code</th><td>{{ payslip.ifsc_code|default:"-" }}</td></tr>
-    </table>
+<tr>
+
+<td width="60%">
+
+<table class="company-wrap">
+<tr>
+
+{% if logo_data_uri %}
+<td>
+<img src="{{ logo_data_uri }}" class="logo" alt="Company Logo">
+</td>
+{% endif %}
+
+</tr>
+</table>
+
+</td>
+
+<td class="payslip-title">
+
+<h2>Salary Payslip</h2>
+
+<div class="period">
+{{ slip.start_date|date:"d M Y" }} - {{ slip.end_date|date:"d M Y" }}
 </div>
+
+</td>
+
+</tr>
+
+</table>
+
+
+<!-- EMPLOYEE + BANK -->
+
+<table class="two-col">
+
+<tr>
+
+<td class="left-box">
+
+<div class="section-title">Employee Details</div>
+
+<table>
+
+<tr>
+<td class="label">Employee Name</td>
+<td>{{ slip.employee_name }}</td>
+</tr>
+
+<tr>
+<td class="label">Email</td>
+<td>{{ slip.employee_email|default:"-" }}</td>
+</tr>
+
+<tr>
+<td class="label">Department</td>
+<td>{{ slip.department|default:"-" }}</td>
+</tr>
+
+<tr>
+<td class="label">Job Position</td>
+<td>{{ slip.job_position|default:"-" }}</td>
+</tr>
+
+<tr>
+<td class="label">Job Role</td>
+<td>{{ slip.job_role|default:"-" }}</td>
+</tr>
+
+</table>
+
+</td>
+
+
+<td class="right-box">
+
+<div class="section-title">Bank Details</div>
+
+<table>
+
+<tr>
+<td class="label">Bank Name</td>
+<td>{{ slip.bank_name|default:"-" }}</td>
+</tr>
+
+<tr>
+<td class="label">Account Number</td>
+<td>{{ slip.account_number|default:"-" }}</td>
+</tr>
+
+<tr>
+<td class="label">IFSC Code</td>
+<td>{{ slip.ifsc_code|default:"-" }}</td>
+</tr>
+
+<tr>
+<td class="label">Shift</td>
+<td>{{ slip.shift|default:"-" }}</td>
+</tr>
+
+<tr>
+<td class="label">Work Type</td>
+<td>{{ slip.work_type|default:"-" }}</td>
+</tr>
+
+</table>
+
+</td>
+
+</tr>
+
+</table>
+
+
+<!-- ATTENDANCE -->
+
+<div class="section">
+
+<div class="section-title">Attendance Summary</div>
+
+<table>
+
+<tr>
+<th>Total Working Days</th>
+<th>Paid Days</th>
+<th>Leaves</th>
+<th>LOP Days</th>
+<th>Basic Salary</th>
+<th>Gross Wages</th>
+</tr>
+
+<tr>
+<td>{{ payslip.total_working_days }}</td>
+<td>{{ payslip.paid_days }}</td>
+<td>{{ payslip.leaves }}</td>
+<td>{{ payslip.lop_days }}</td>
+<td class="amount">{{ currency }} {{ payslip.basic_salary }}</td>
+<td class="amount">{{ currency }} {{ payslip.gross_wages }}</td>
+</tr>
+
+</table>
+
+</div>
+
+
+<!-- EARNINGS + DEDUCTIONS -->
+
+<table class="two-col">
+
+<tr>
+
+<td class="left-box">
+
+<div class="section-title">Earnings</div>
+
+<table>
+
+<tr>
+<th>Component</th>
+<th class="amount">Amount</th>
+</tr>
+
+<tr>
+<td>Basic</td>
+<td class="amount">{{ currency }} {{ payslip.basic }}</td>
+</tr>
+
+<tr>
+<td>HRA</td>
+<td class="amount">{{ currency }} {{ payslip.hra }}</td>
+</tr>
+
+<tr>
+<td>Conveyance</td>
+<td class="amount">{{ currency }} {{ payslip.conveyance_allowance }}</td>
+</tr>
+
+<tr>
+<td>Medical Allowance</td>
+<td class="amount">{{ currency }} {{ payslip.medical_allowance }}</td>
+</tr>
+
+<tr>
+<td>Other Allowances</td>
+<td class="amount">{{ currency }} {{ payslip.other_allowances }}</td>
+</tr>
+
+<tr>
+<th>Total Earnings</th>
+<th class="amount">{{ currency }} {{ payslip.total_earnings }}</th>
+</tr>
+
+</table>
+
+</td>
+
+
+<td class="right-box">
+
+<div class="section-title">Deductions</div>
+
+<table>
+
+<tr>
+<th>Component</th>
+<th class="amount">Amount</th>
+</tr>
+
+<tr>
+<td>EPF</td>
+<td class="amount">{{ currency }} {{ payslip.epf }}</td>
+</tr>
+
+<tr>
+<td>ESI</td>
+<td class="amount">{{ currency }} {{ payslip.esi }}</td>
+</tr>
+
+<tr>
+<td>Professional Tax</td>
+<td class="amount">{{ currency }} {{ payslip.professional_tax }}</td>
+</tr>
+
+<tr>
+<td>Manual Deduction</td>
+<td class="amount">{{ currency }} {{ payslip.deduction_amount|default:"0.00" }}</td>
+</tr>
+
+<tr>
+<td>Deduction Description</td>
+<td>{{ payslip.deduction_description|default:"-" }}</td>
+</tr>
+
+<tr>
+<th>Total Deductions</th>
+<th class="amount">{{ currency }} {{ payslip.total_deductions }}</th>
+</tr>
+
+</table>
+
+</td>
+
+</tr>
+
+</table>
+
+
+<!-- NET SALARY -->
+
+<div class="net-salary">
+
+<div class="net-label">Net Salary Payable</div>
+
+<div class="net-amount">
+{{ currency }} {{ payslip.net_salary }}
+</div>
+
+</div>
+
+
+<!-- FOOTER -->
+
+<div class="footer">
+
+<table class="footer-table">
+
+<tr>
+
+<td class="note">
+This is a system generated payslip and does not require signature.
+For any discrepancy please contact HR / Payroll department.
+</td>
+
+</tr>
+
+</table>
+
+</div>
+
+</div>
+
 </body>
 </html>

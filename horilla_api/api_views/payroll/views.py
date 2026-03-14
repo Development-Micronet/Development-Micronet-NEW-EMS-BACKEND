@@ -1,5 +1,8 @@
+import base64
 import gettext
+import os
 from collections import defaultdict
+from io import BytesIO
 
 from django.contrib.auth.decorators import permission_required
 from django.shortcuts import render
@@ -23,11 +26,13 @@ from payroll.models.models import (
     Deduction,
     LoanAccount,
     Payslip,
+    PayslipNew,
     Reimbursement,
 )
 from payroll.models.tax_models import TaxBracket
 from payroll.threadings.mail import MailSendThread
 from payroll.views.views import payslip_pdf
+from xhtml2pdf import pisa
 
 from ...api_methods.base.methods import groupby_queryset
 from ...api_serializers.payroll.serializers import (
@@ -36,6 +41,7 @@ from ...api_serializers.payroll.serializers import (
     DeductionSerializer,
     LoanAccountSerializer,
     PayslipSerializer,
+    PayslipNewSerializer,
     ReimbursementSerializer,
     TaxBracketSerializer,
 )
@@ -111,6 +117,84 @@ class PayslipSendMailView(APIView):
         mail_thread = MailSendThread(request, result_dict=result_dict, ids=payslip_ids)
         mail_thread.start()
         return Response({"status": "success"}, status=200)
+
+
+class PayslipNewView(APIView):
+    """API View for PayslipNew model - New payslip structure with all required fields"""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, id=None):
+        """Get payslips or a specific payslip by id"""
+        if id:
+            payslip = PayslipNew.objects.filter(id=id).first()
+            if not payslip:
+                return Response({"error": "Payslip not found"}, status=404)
+            if (
+                request.user.has_perm("payroll.view_payslipnew")
+                or payslip.employee.employee_user_id == request.user
+            ):
+                serializer = PayslipNewSerializer(payslip)
+                return Response(serializer.data, status=200)
+            return Response({"error": "Permission denied"}, status=403)
+
+        if request.user.has_perm("payroll.view_payslipnew"):
+            payslips = PayslipNew.objects.all()
+        else:
+            payslips = PayslipNew.objects.filter(employee__employee_user_id=request.user)
+
+        # Filter by query parameters
+        start_date = request.GET.get("start_date")
+        end_date = request.GET.get("end_date")
+        status = request.GET.get("status")
+        employee_id = request.GET.get("employee_id")
+
+        if start_date:
+            payslips = payslips.filter(start_date__gte=start_date)
+        if end_date:
+            payslips = payslips.filter(end_date__lte=end_date)
+        if status:
+            payslips = payslips.filter(status=status)
+        if employee_id:
+            payslips = payslips.filter(employee_id=employee_id)
+
+        pagination = PageNumberPagination()
+        page = pagination.paginate_queryset(payslips, request)
+        serializer = PayslipNewSerializer(page, many=True)
+        return pagination.get_paginated_response(serializer.data)
+
+    @method_decorator(permission_required("payroll.add_payslipnew"))
+    def post(self, request):
+        """Create a new payslip"""
+        serializer = PayslipNewSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
+
+    @method_decorator(permission_required("payroll.change_payslipnew"))
+    def put(self, request, id):
+        """Update an existing payslip"""
+        try:
+            payslip = PayslipNew.objects.get(id=id)
+        except PayslipNew.DoesNotExist:
+            return Response({"error": "Payslip not found"}, status=404)
+
+        serializer = PayslipNewSerializer(instance=payslip, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=200)
+        return Response(serializer.errors, status=400)
+
+    @method_decorator(permission_required("payroll.delete_payslipnew"))
+    def delete(self, request, id):
+        """Delete a payslip"""
+        try:
+            payslip = PayslipNew.objects.get(id=id)
+        except PayslipNew.DoesNotExist:
+            return Response({"error": "Payslip not found"}, status=404)
+
+        payslip.delete()
+        return Response({"status": "Payslip deleted successfully"}, status=200)
 
 
 class ContractView(APIView):
@@ -408,148 +492,52 @@ try:
 except Exception:
     HAVE_PDFKIT = False
 
+# helper to build pdfkit configuration; allows WKHTMLTOPDF_CMD setting
+from django.conf import settings
+
+def _get_pdfkit_config():
+    """Return a pdfkit.configuration object or None if binary not available.
+
+    Looks for WKHTMLTOPDF_CMD in Django settings; if absent, tries default
+    configuration (which will raise if wkhtmltopdf is missing).
+    """
+    if not HAVE_PDFKIT:
+        return None
+    cmd = getattr(settings, "WKHTMLTOPDF_CMD", None)
+    try:
+        if cmd:
+            return pdfkit.configuration(wkhtmltopdf=cmd)
+        return pdfkit.configuration()
+    except Exception:
+        return None
+
+
 
 class PayslipPDFAPIView(APIView):
-    """
-    GET /api/payslip/<payslip_id>/?format=pdf
-    Auth:
-      - Accepts SimpleJWT Bearer token (Authorization: Bearer <token>)
-      - Also accepts session auth (browser) when available
-    """
+    permission_classes = [IsAuthenticated]
 
-    authentication_classes = (JWTAuthentication, SessionAuthentication)
-    permission_classes = (IsAuthenticated,)
-
-    def get(self, request, id, format=None):
-        # get payslip or 404
-        payslip = get_object_or_404(Payslip, id=id)
-
-        # authorization: same logic as your view
-        user = request.user
-        if not (
-            user.has_perm("payroll.view_payslip")
-            or payslip.employee_id.employee_user_id == user
-        ):
+    def get(self, request, pk=None, id=None):
+        payslip_id = pk or id
+        if not payslip_id:
             return Response(
-                {"detail": "You do not have permission to view this payslip."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        # employee & company date format resolution
-        employee = user.employee_get  # keep same accessor you used
-        info = EmployeeWorkInformation.objects.filter(employee_id=employee)
-        if info.exists():
-            # take the last one (mirrors your loop behavior)
-            employee_company = info.last().company_id
-            emp_company = Company.objects.filter(company=employee_company).first()
-            date_format = (
-                emp_company.date_format
-                if emp_company and emp_company.date_format
-                else "MMM. D, YYYY"
-            )
-        else:
-            date_format = "MMM. D, YYYY"
-
-        # compose data from payslip (same as original)
-        data = (
-            payslip.pay_head_data.copy()
-            if isinstance(payslip.pay_head_data, dict)
-            else {}
-        )
-        start_date_str = data.get("start_date")
-        end_date_str = data.get("end_date")
-
-        if not start_date_str or not end_date_str:
-            return Response(
-                {"detail": "Payslip missing start_date or end_date"},
+                {"error": "Payslip ID is required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # parse dates
-        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+        payslip = get_object_or_404(Payslip, pk=payslip_id)
+        # if not (
+        #     request.user.has_perm("payroll.view_payslip")
+        #     or payslip.employee_id.employee_user_id == request.user
+        # ):
+        #     return Response(
+        #         {"detail": "You do not have permission to view this payslip."},
+        #         status=status.HTTP_403_FORBIDDEN,
+        #     )
 
-        month_start_name = start_date.strftime("%B %d, %Y")
-        month_end_name = end_date.strftime("%B %d, %Y")
-
-        # formatted date for chosen company format (safe default if not found)
-        formatted_start_date = start_date.strftime(
-            HORILLA_DATE_FORMATS.get(date_format, "%b. %d, %Y")
-        )
-        formatted_end_date = end_date.strftime(
-            HORILLA_DATE_FORMATS.get(date_format, "%b. %d, %Y")
-        )
-
-        # fill template context like original view
-        data["month_start_name"] = month_start_name
-        data["month_end_name"] = month_end_name
-        data["formatted_start_date"] = formatted_start_date
-        data["formatted_end_date"] = formatted_end_date
-        data["employee"] = payslip.employee_id
-        data["payslip"] = payslip
-        data["json_data"] = data.copy()
-        data["json_data"]["employee"] = payslip.employee_id.id
-        data["json_data"]["payslip"] = payslip.id
-        data["instance"] = payslip
-        data["currency"] = (
-            PayrollSettings.objects.first().currency_symbol
-            if PayrollSettings.objects.exists()
-            else "Ã¢â€šÂ¹"
-        )
-        data["all_deductions"] = []
-        for deduction_list in [
-            data.get("basic_pay_deductions", []),
-            data.get("gross_pay_deductions", []),
-            data.get("pretax_deductions", []),
-            data.get("post_tax_deductions", []),
-            data.get("tax_deductions", []),
-            data.get("net_deductions", []),
-        ]:
-            data["all_deductions"].extend(deduction_list)
-
-        data["all_allowances"] = data.get("allowances", []).copy()
-        # equalize lengths (your helper)
-        equalize_lists_length(data.setdefault("allowances", []), data["all_deductions"])
-        data["zipped_data"] = zip(data["allowances"], data["all_deductions"])
-        data["host"] = request.get_host()
-        data["protocol"] = "https" if request.is_secure() else "http"
-        data["company"] = Company.objects.filter(hq=True).first()
-
-        # render HTML string using template
-        html = render_to_string(
-            "payroll/payslip/payslip_pdf.html", context=data, request=request
-        )
-
-        # If client asked for PDF and pdfkit is available -> return PDF
-        requested_format = request.GET.get("format", "").lower()
-        if requested_format == "pdf":
-            if not HAVE_PDFKIT:
-                return Response(
-                    {
-                        "detail": "PDF generation not available on server. Install pdfkit/wkhtmltopdf."
-                    },
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            try:
-                # optional: configure pdfkit with path if needed
-                pdf_options = {
-                    "enable-local-file-access": None,  # if your template references local CSS
-                }
-                pdf_bytes = pdfkit.from_string(html, False, options=pdf_options)
-                response = HttpResponse(pdf_bytes, content_type="application/pdf")
-                response["Content-Disposition"] = f'inline; filename="payslip-{id}.pdf"'
-                return response
-            except Exception as e:
-                return Response(
-                    {"detail": f"PDF generation failed: {str(e)}"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                )
-
-        # default: return rendered HTML (use HttpResponse so browser sees it nicely)
-        return HttpResponse(html)
+        return payslip_pdf(request, payslip.id)
 
 
-from datetime import timedelta
+
 
 #####################################
 #
@@ -573,95 +561,6 @@ from ...api_serializers.payroll.serializers import (
     EmployeeContractReadSerializer,
     EmployeeContractStatusUpdateSerializer,
 )
-
-# class EmployeeContractAdminAPIView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     @method_decorator(
-#         permission_required("payroll.add_employeecontract", raise_exception=True)
-#     )
-#     def post(self, request):
-#         serializer = EmployeeContractCreateSerializer(data=request.data)
-#         serializer.is_valid(raise_exception=True)
-
-#         employee_id = serializer.validated_data["employee_id"]
-
-#         try:
-#             employee = Employee.objects.get(id=employee_id)
-#         except Employee.DoesNotExist:
-#             return Response(
-#                 {"employee_id": "Employee does not exist"},
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         try:
-#             work_info = EmployeeWorkInformation.objects.get(employee_id=employee)
-#         except EmployeeWorkInformation.DoesNotExist:
-#             return Response(
-#                 {"error": "Employee work information not found"},
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         # Ã¢ÂÅ’ block duplicate active contract
-#         if EmployeeContract.objects.filter(employee=employee, status="active").exists():
-#             return Response(
-#                 {"error": "Active contract already exists"},
-#                 status=status.HTTP_400_BAD_REQUEST,
-#             )
-
-#         contract = EmployeeContract.objects.create(
-#             employee=employee,
-#             contract_type=serializer.validated_data["contract_type"],
-#             contract_start_date=work_info.Joining_Date_Label,
-#             contract_end_date=work_info.Contract_End_Date_Label,
-#             wage_type=serializer.validated_data["wage_type"],
-#             pay_frequency=serializer.validated_data["pay_frequency"],
-#             basic_salary=work_info.Basic_Salary_Label,
-#             department=work_info.Department_Name,
-#             job_position=work_info.Job_Position_Name,
-#             job_role=work_info.Job_Role_Name,
-#             shift=work_info.Shift_Name,
-#             work_type=work_info.Work_Type_Name,
-#             notice_period_days=serializer.validated_data.get("notice_period_days", 30),
-#             contract_document=serializer.validated_data.get("contract_document"),
-#             status="active",
-#         )
-
-#         return Response(
-#             {
-#                 "message": "Contract created successfully",
-#                 "contract_id": contract.id,
-#             },
-#             status=status.HTTP_201_CREATED,
-#         )
-
-
-# class EmployeeContractAdminAPIView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     # Ã°Å¸â€Â¹ ADMIN GET (LIST / DETAIL)
-#     @method_decorator(
-#         permission_required("payroll.view_employeecontract", raise_exception=True)
-#     )
-#     def get(self, request, pk=None):
-#         if pk:
-#             try:
-#                 contract = EmployeeContract.objects.select_related("employee").get(
-#                     pk=pk
-#                 )
-#             except EmployeeContract.DoesNotExist:
-#                 return Response(
-#                     {"error": "Contract not found"},
-#                     status=status.HTTP_404_NOT_FOUND,
-#                 )
-
-#             serializer = EmployeeContractReadSerializer(contract)
-#             return Response(serializer.data, status=status.HTTP_200_OK)
-
-#         contracts = EmployeeContract.objects.select_related("employee").order_by("-id")
-
-#         serializer = EmployeeContractReadSerializer(contracts, many=True)
-#         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class EmployeeContractAdminAPIView(APIView):
@@ -1044,26 +943,90 @@ class EmployeePayslipNewPDFAPIView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        if not HAVE_PDFKIT:
-            return Response(
-                {
-                    "detail": (
-                        "PDF generation not available on server. "
-                        "Install pdfkit/wkhtmltopdf."
-                    )
-                },
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-
         currency = (
             PayrollSettings.objects.first().currency_symbol
             if PayrollSettings.objects.exists()
             else "INR"
         )
+        work_info = getattr(payslip.employee, "employee_work_info", None)
+        bank_info = getattr(payslip.employee, "employee_bank_details", None)
+        company = getattr(work_info, "company_id", None) or Company.objects.filter(
+            hq=True
+        ).first()
+        stamp_path = os.path.join(
+            settings.BASE_DIR,
+            "payroll",
+            "templates",
+            "payroll",
+            "payslip",
+            "stamp.png",
+        )
+        stamp_data_uri = None
+        if os.path.exists(stamp_path):
+            with open(stamp_path, "rb") as stamp_file:
+                stamp_data_uri = (
+                    "data:image/png;base64,"
+                    + base64.b64encode(stamp_file.read()).decode("ascii")
+                )
+        logo_data_uri = None
+        logo_path = os.path.join(
+            settings.BASE_DIR,
+            "payroll",
+            "templates",
+            "payroll",
+            "payslip",
+            "company_logo.png",
+        )
+        if os.path.exists(logo_path):
+            with open(logo_path, "rb") as logo_file:
+                logo_data_uri = (
+                    "data:image/png;base64,"
+                    + base64.b64encode(logo_file.read()).decode("ascii")
+                )
+        slip = {
+            "payslip_id": payslip.id,
+            "employee_name": payslip.employee.get_full_name(),
+            "employee_email": getattr(
+                getattr(payslip.employee, "employee_user_id", None), "email", None
+            )
+            or getattr(work_info, "email", None)
+            or getattr(payslip.employee, "email", None),
+            "department": payslip.department
+            or getattr(work_info, "Department_Name", None)
+            or getattr(getattr(work_info, "department_id", None), "department", None),
+            "job_position": payslip.job_position
+            or getattr(work_info, "Job_Position_Name", None)
+            or getattr(
+                getattr(work_info, "job_position_id", None), "job_position", None
+            ),
+            "job_role": payslip.job_role
+            or getattr(work_info, "Job_Role_Name", None)
+            or getattr(getattr(work_info, "job_role_id", None), "job_role", None),
+            "shift": payslip.shift
+            or getattr(work_info, "Shift_Name", None)
+            or getattr(getattr(work_info, "shift_id", None), "employee_shift", None),
+            "work_type": payslip.work_type
+            or getattr(work_info, "Work_Type_Name", None)
+            or getattr(getattr(work_info, "work_type_id", None), "work_type", None),
+            "bank_name": payslip.bank_name or getattr(bank_info, "bank_name", None),
+            "account_number": payslip.account_number
+            or getattr(bank_info, "account_number", None),
+            "ifsc_code": payslip.ifsc_code
+            or getattr(bank_info, "any_other_code1", None),
+            "basic_salary": payslip.basic_salary,
+            "start_date": payslip.start_date,
+            "end_date": payslip.end_date,
+            "generated_at": payslip.created_at,
+            "status": payslip.get_status_display(),
+        }
         context = {
             "payslip": payslip,
             "employee": payslip.employee,
             "currency": currency,
+            "slip": slip,
+            "company": company,
+            "stamp_data_uri": stamp_data_uri,
+            "logo_data_uri": logo_data_uri,
         }
         html = render_to_string(
             "payroll/payslip/payslip_new_pdf.html",
@@ -1072,9 +1035,17 @@ class EmployeePayslipNewPDFAPIView(APIView):
         )
 
         try:
-            pdf_options = {"enable-local-file-access": None}
-            pdf_bytes = pdfkit.from_string(html, False, options=pdf_options)
-            response = HttpResponse(pdf_bytes, content_type="application/pdf")
+            pdf_buffer = BytesIO()
+            pdf = pisa.CreatePDF(src=html, dest=pdf_buffer)
+            if pdf.err:
+                return Response(
+                    {"detail": "PDF generation failed while rendering payslip."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            response = HttpResponse(
+                pdf_buffer.getvalue(), content_type="application/pdf"
+            )
             response["Content-Disposition"] = (
                 f'inline; filename="payslip-new-{pk}.pdf"'
             )

@@ -1,8 +1,69 @@
+import base64
+from io import BytesIO
+import os
+from django.conf import settings
+from django.core.mail import EmailMessage, EmailMultiAlternatives
+from django.db import transaction
+from django.template.loader import render_to_string
+from email.mime.image import MIMEImage
 from rest_framework import serializers
+from xhtml2pdf import pisa
 
+from base.backends import ConfiguredEmailBackend
+from base.models import BrevoEmailConfiguration, HorillaMailTemplate
 from base.models import Department, JobPosition
 from employee.models import Employee
 from recruitment.models import Candidate, Recruitment
+
+try:
+    from brevo_email_sender import BrevoEmailSender
+
+    BREVO_AVAILABLE = True
+except ImportError:
+    BREVO_AVAILABLE = False
+
+OFFER_LETTER_TEMPLATE_TITLE = "Offer Letter"
+OFFER_LETTER_TEMPLATE_BODY = """
+<div style="font-family: 'Times New Roman', serif; color: #111827; line-height: 1.65;">
+  <p>To,</p>
+  <p>
+    <strong>{{ instance.name }}</strong><br>
+    Mobile: {{ instance.mobile|default:"-" }}<br>
+    E-mail: {{ instance.email }}
+  </p>
+  <p style="text-align:center;"><strong><u>Sub: Offer Letter</u></strong></p>
+  <p>Dear {{ instance.name }},</p>
+  <p>
+    With reference to your application and subsequent interview with us, we are pleased
+    to offer you the position of <strong>{{ instance.job_position_id.job_position }}</strong>
+    in our organization. We feel confident that you will contribute your skills and
+    experience to the growth of our organization.
+  </p>
+  <p>
+    We are pleased to appoint you for full-time employment.
+    {% if instance.joining_date %}
+    As per the discussion, your joining date will be on <strong>{{ instance.joining_date }}</strong>.
+    {% else %}
+    Your joining date will be communicated separately.
+    {% endif %}
+  </p>
+  <p>Your remuneration and other terms will be shared as per the finalized discussion.</p>
+  <p>Please submit the following documents at the time of reporting for duty:</p>
+  <ul>
+    <li>Photocopies of all educational testimonials.</li>
+    <li>Address proof of permanent and present address.</li>
+    <li>Photo ID proof.</li>
+    <li>PAN card copy.</li>
+  </ul>
+  <p>
+    Your offer of appointment may be withdrawn if any of the information furnished above
+    is found to be incorrect.
+  </p>
+  <p>Wishing you all the best,</p>
+  <p>For {{ instance.recruitment_id.company_id.company|default:"HR Team" }}</p>
+  <p>Authorized Signatory</p>
+</div>
+""".strip()
 
 
 class RecruitmentFlexibleField(serializers.RelatedField):
@@ -72,9 +133,13 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    referral_data = serializers.SerializerMethodField(read_only=True)
     resume = serializers.FileField(required=False, allow_null=True)
     gender = serializers.CharField(required=False)
     source = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    offer_letter_status = serializers.ChoiceField(
+        choices=Candidate.offer_letter_statuses, required=False
+    )
 
     class Meta:
         model = Candidate
@@ -95,6 +160,8 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             "zip",
             "resume",
             "referral",
+            "referral_data",
+            "offer_letter_status",
         ]
 
     def to_internal_value(self, data):
@@ -118,11 +185,30 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             "Zip Code": "zip",
             "Resume": "resume",
             "Referral": "referral",
+            "Offer Letter": "offer_letter_status",
+            "Offer Letter Status": "offer_letter_status",
         }
         for incoming_key, target_key in aliases.items():
             if incoming_key in mutable and target_key not in mutable:
                 mutable[target_key] = mutable[incoming_key]
         return super().to_internal_value(mutable)
+
+    def validate_offer_letter_status(self, value):
+        if value in (None, ""):
+            return value
+        normalized = str(value).strip().lower().replace(" ", "_")
+        valid_statuses = dict(Candidate.offer_letter_statuses)
+        display_map = {
+            str(label).strip().lower().replace(" ", "_"): key
+            for key, label in Candidate.offer_letter_statuses
+        }
+        if normalized in valid_statuses:
+            return normalized
+        if normalized in display_map:
+            return display_map[normalized]
+        raise serializers.ValidationError(
+            "Offer letter status must be one of not_sent, sent, accepted, rejected, or joined."
+        )
 
     def validate_gender(self, value):
         if value in (None, ""):
@@ -151,6 +237,14 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             )
         return source_map[normalized]
 
+    def validate_resume(self, value):
+        if value in (None, ""):
+            return value
+        filename = getattr(value, "name", "")
+        if not filename.lower().endswith(".pdf"):
+            raise serializers.ValidationError("Resume must be a PDF file.")
+        return value
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
         recruitment = attrs.get("recruitment_id")
@@ -160,6 +254,323 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             if not recruitment.open_positions.filter(id=job_position.id).exists():
                 recruitment.open_positions.add(job_position)
         return attrs
+
+    def create(self, validated_data):
+        with transaction.atomic():
+            candidate = super().create(validated_data)
+            self._handle_offer_letter_status(
+                candidate,
+                previous_status=None,
+                status_provided="offer_letter_status" in validated_data,
+            )
+            return candidate
+
+    def update(self, instance, validated_data):
+        previous_status = instance.offer_letter_status
+        with transaction.atomic():
+            candidate = super().update(instance, validated_data)
+            self._handle_offer_letter_status(
+                candidate,
+                previous_status=previous_status,
+                status_provided="offer_letter_status" in validated_data,
+            )
+            return candidate
+
+    def _handle_offer_letter_status(
+        self, candidate, previous_status=None, status_provided=False
+    ):
+        current_status = candidate.offer_letter_status
+        should_send = current_status == "sent" and (
+            previous_status != "sent" or status_provided
+        )
+        if not should_send:
+            return
+
+        self._ensure_offer_letter_template(candidate)
+        self._send_offer_letter_mail(candidate)
+
+    def _ensure_offer_letter_template(self, candidate):
+        HorillaMailTemplate.objects.get_or_create(
+            title=OFFER_LETTER_TEMPLATE_TITLE,
+            defaults={
+                "body": OFFER_LETTER_TEMPLATE_BODY,
+                "company_id": getattr(
+                    getattr(candidate, "recruitment_id", None), "company_id", None
+                ),
+            },
+        )
+
+    def _send_offer_letter_mail(self, candidate):
+        request = self.context.get("request")
+        protocol = getattr(request, "scheme", "http") if request else "http"
+        host = request.get_host() if request else "127.0.0.1:8000"
+        logo_data_uri = self._get_company_logo_data_uri(candidate)
+        logo_path = self._get_company_logo_path(candidate)
+        job_position = getattr(
+            getattr(candidate, "job_position_id", None), "job_position", "-"
+        )
+        recruitment = getattr(getattr(candidate, "recruitment_id", None), "title", "-")
+        joining_date = getattr(candidate, "joining_date", None) or "To be discussed"
+
+        try:
+            html_message = render_to_string(
+                "onboarding/mail_templates/offer_letter.html",
+                {
+                    "instance": candidate,
+                    "host": host,
+                    "protocol": protocol,
+                    "logo_data_uri": logo_data_uri,
+                    "logo_cid": "company_logo_inline",
+                },
+                request=request,
+            )
+        except Exception:
+            html_message = f"""
+            <div style="font-family: Arial, Helvetica, sans-serif; color: #1f2937; line-height: 1.6;">
+              <h2>Offer Letter</h2>
+              <p>Dear {candidate.name},</p>
+              <p>We are pleased to offer you the position of <strong>{job_position}</strong>.</p>
+              <p><strong>Recruitment:</strong> {recruitment}</p>
+              <p><strong>Joining Date:</strong> {joining_date}</p>
+              <p><strong>Status:</strong> Sent</p>
+              <p>Best regards,<br>HR Team</p>
+            </div>
+            """.strip()
+
+        subject = f"Offer Letter - {candidate.name}"
+        pdf_filename = f"offer_letter_{candidate.id}.pdf"
+        text_content = (
+            f"Dear {candidate.name},\n\n"
+            f"We are pleased to offer you the position of {job_position}.\n"
+            f"Recruitment: {recruitment}\n"
+            f"Joining Date: {joining_date}\n\n"
+            "Please review the offer letter and contact HR for any clarification.\n\n"
+            "Best regards,\nHR Team"
+        )
+        pdf_content = self._build_offer_letter_pdf(
+            candidate=candidate,
+            host=host,
+            protocol=protocol,
+            logo_data_uri=logo_data_uri,
+        )
+        if not pdf_content.startswith(b"%PDF"):
+            preview = pdf_content[:300].decode("utf-8", errors="ignore")
+            print(
+                f"[OfferLetter] PDF generation failed for candidate_id={candidate.id}. "
+                f"Response preview: {preview}"
+            )
+            raise serializers.ValidationError(
+                {
+                    "offer_letter_status": (
+                        "Offer letter PDF could not be generated correctly."
+                    )
+                }
+            )
+        print(
+            f"[OfferLetter] Triggered for candidate_id={candidate.id}, "
+            f"email={candidate.email}, status={candidate.offer_letter_status}"
+        )
+        print(
+            f"[OfferLetter] PDF generated successfully for candidate_id={candidate.id} "
+            f"filename={pdf_filename}"
+        )
+
+        if BREVO_AVAILABLE:
+            api_key = getattr(settings, "BREVO_API_KEY", "").strip()
+            from_email = getattr(settings, "BREVO_FROM_EMAIL", "noreply@horilla.com")
+            from_name = getattr(settings, "BREVO_FROM_NAME", "HR Management")
+            if not api_key:
+                brevo_config = BrevoEmailConfiguration.objects.filter(
+                    is_active=True
+                ).first()
+                if brevo_config:
+                    api_key = brevo_config.api_key
+                    from_email = brevo_config.from_email
+                    from_name = brevo_config.from_name
+
+            if api_key:
+                try:
+                    print(
+                        f"[OfferLetter] Trying Brevo send to {candidate.email} "
+                        f"with from_email={from_email}"
+                    )
+                    sender = BrevoEmailSender(
+                        api_key=api_key,
+                        from_email=from_email,
+                        from_name=from_name,
+                    )
+                    success, _, _ = sender.send_email(
+                        to_email=candidate.email,
+                        to_name=candidate.name,
+                        subject=subject,
+                        html_content=html_message,
+                        text_content=text_content,
+                        attachments=[
+                            {
+                                "name": pdf_filename,
+                                "content": base64.b64encode(pdf_content).decode("utf-8"),
+                            }
+                        ],
+                    )
+                    if success:
+                        print(
+                            f"[OfferLetter] Mail sent successfully via Brevo "
+                            f"to {candidate.email}"
+                        )
+                        return
+                    print(
+                        f"[OfferLetter] Brevo send returned unsuccessful result "
+                        f"for {candidate.email}"
+                    )
+                except Exception:
+                    import traceback
+
+                    print(
+                        f"[OfferLetter] Brevo send failed for {candidate.email}"
+                    )
+                    traceback.print_exc()
+            else:
+                print("[OfferLetter] Brevo not configured. Falling back to SMTP.")
+        else:
+            print("[OfferLetter] Brevo package not available. Falling back to SMTP.")
+
+        try:
+            email_backend = ConfiguredEmailBackend()
+            from_email = getattr(
+                email_backend, "dynamic_from_email_with_display_name", None
+            )
+            print(
+                f"[OfferLetter] Trying SMTP send to {candidate.email} "
+                f"with from_email={from_email}"
+            )
+            message = EmailMultiAlternatives(
+                subject=subject,
+                body=text_content,
+                from_email=from_email,
+                to=[candidate.email],
+            )
+            message.attach_alternative(html_message, "text/html")
+            if logo_path and os.path.exists(logo_path):
+                with open(logo_path, "rb") as logo_file:
+                    logo_img = MIMEImage(logo_file.read())
+                    logo_img.add_header("Content-ID", "<company_logo_inline>")
+                    logo_img.add_header("Content-Disposition", "inline", filename=os.path.basename(logo_path))
+                    message.attach(logo_img)
+            message.attach(pdf_filename, pdf_content, "application/pdf")
+            message.send(fail_silently=False)
+            print(
+                f"[OfferLetter] Mail sent successfully via SMTP to {candidate.email}"
+            )
+            return
+        except Exception as exc:
+            import traceback
+
+            print(f"[OfferLetter] SMTP send failed for {candidate.email}: {exc}")
+            traceback.print_exc()
+            raise serializers.ValidationError(
+                {
+                    "offer_letter_status": (
+                        "Offer letter email could not be sent: "
+                        f"{exc}"
+                    )
+                }
+            )
+
+    def _build_offer_letter_pdf(self, candidate, host, protocol, logo_data_uri=None):
+        buffer = BytesIO()
+        try:
+            html = render_to_string(
+                "onboarding/mail_templates/offer_letter_pdf.html",
+                {
+                    "instance": candidate,
+                    "host": host,
+                    "protocol": protocol,
+                    "logo_data_uri": logo_data_uri,
+                    "stamp_data_uri": self._get_stamp_data_uri(),
+                    "signature_text": self._get_signature_text(candidate),
+                },
+                request=self.context.get("request"),
+            )
+            pdf = pisa.CreatePDF(src=html, dest=buffer)
+            if pdf.err:
+                raise serializers.ValidationError(
+                    {
+                        "offer_letter_status": "Offer letter PDF generation failed during template rendering."
+                    }
+                )
+            return buffer.getvalue()
+        except Exception as exc:
+            print(
+                f"[OfferLetter] xhtml2pdf generation exception for candidate_id={candidate.id}: {exc}"
+            )
+            raise serializers.ValidationError(
+                {
+                    "offer_letter_status": f"Offer letter PDF generation failed: {exc}"
+                }
+            )
+        finally:
+            buffer.close()
+
+    def _get_company_logo_path(self, candidate):
+        company = getattr(getattr(candidate, "recruitment_id", None), "company_id", None)
+        logo_field = getattr(company, "icon", None)
+        logo_path = getattr(logo_field, "path", None)
+        if logo_path and os.path.exists(logo_path):
+            return logo_path
+        return None
+
+    def _get_company_logo_data_uri(self, candidate):
+        logo_path = self._get_company_logo_path(candidate)
+        if not logo_path:
+            fallback_logo = os.path.join(
+                settings.BASE_DIR,
+                "payroll",
+                "templates",
+                "payroll",
+                "payslip",
+                "company_logo.png",
+            )
+            if os.path.exists(fallback_logo):
+                logo_path = fallback_logo
+        if not logo_path:
+            return None
+        ext = os.path.splitext(logo_path)[1].lower()
+        mime_map = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".svg": "image/svg+xml",
+        }
+        mime_type = mime_map.get(ext, "application/octet-stream")
+        try:
+            with open(logo_path, "rb") as logo_file:
+                encoded = base64.b64encode(logo_file.read()).decode("utf-8")
+            return f"data:{mime_type};base64,{encoded}"
+        except Exception:
+            return None
+
+    def _get_stamp_data_uri(self):
+        stamp_path = os.path.join(
+            settings.BASE_DIR,
+            "payroll",
+            "templates",
+            "payroll",
+            "payslip",
+            "stamp.png",
+        )
+        if not os.path.exists(stamp_path):
+            return None
+        with open(stamp_path, "rb") as stamp_file:
+            return "data:image/png;base64," + base64.b64encode(
+                stamp_file.read()
+            ).decode("ascii")
+
+    def _get_signature_text(self, candidate):
+        company = getattr(getattr(candidate, "recruitment_id", None), "company_id", None)
+        company_name = getattr(company, "company", "") or "Authorized Signatory"
+        return company_name
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -173,3 +584,14 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
         if instance.gender:
             data["gender"] = instance.gender.capitalize()
         return data
+
+    def get_referral_data(self, obj):
+        referral = getattr(obj, "referral", None)
+        if not referral:
+            return None
+        return {
+            "id": referral.id,
+            "badge_id": getattr(referral, "badge_id", None),
+            "name": referral.get_full_name(),
+            "email": getattr(referral, "email", None),
+        }
