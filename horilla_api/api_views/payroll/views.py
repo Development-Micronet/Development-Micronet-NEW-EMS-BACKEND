@@ -1,13 +1,16 @@
 import base64
 import gettext
+import json
 import os
 from collections import defaultdict
 from io import BytesIO
 
 from django.contrib.auth.decorators import permission_required
+from django.db import IntegrityError, transaction
 from django.shortcuts import render
 from django.utils.decorators import method_decorator
 from rest_framework.pagination import PageNumberPagination
+from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -40,6 +43,7 @@ from ...api_serializers.payroll.serializers import (
     ContractSerializer,
     DeductionSerializer,
     LoanAccountSerializer,
+    PayslipNewCreateRequestSerializer,
     PayslipSerializer,
     PayslipNewSerializer,
     ReimbursementSerializer,
@@ -164,12 +168,80 @@ class PayslipNewView(APIView):
 
     @method_decorator(permission_required("payroll.add_payslipnew"))
     def post(self, request):
-        """Create a new payslip"""
-        serializer = PayslipNewSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+        """Create one or more payslips."""
+        payload = request.data.copy()
+        employee_value = None
+
+        if hasattr(request.data, "getlist"):
+            employee_values = request.data.getlist("employee")
+            if len(employee_values) > 1:
+                employee_value = employee_values
+            elif len(employee_values) == 1:
+                employee_value = employee_values[0]
+
+        if employee_value is None:
+            employee_value = payload.get("employee")
+
+        if isinstance(employee_value, str):
+            stripped_value = employee_value.strip()
+            if stripped_value.startswith("[") and stripped_value.endswith("]"):
+                try:
+                    employee_value = json.loads(stripped_value)
+                except json.JSONDecodeError:
+                    pass
+
+        if isinstance(employee_value, (list, tuple)) and "employees" not in payload:
+            payload["employee"] = list(employee_value)
+
+        serializer = PayslipNewCreateRequestSerializer(
+            data=payload, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+
+        validated_data = dict(serializer.validated_data)
+        employees = validated_data.pop("employees", None)
+        employee = validated_data.pop("employee", None)
+        employee_list = list(employees or [employee])
+
+        unique_employees = []
+        seen_employee_ids = set()
+        for employee_obj in employee_list:
+            if employee_obj.id in seen_employee_ids:
+                continue
+            seen_employee_ids.add(employee_obj.id)
+            unique_employees.append(employee_obj)
+
+        try:
+            with transaction.atomic():
+                created_payslips = [
+                    PayslipNew.objects.create(employee=employee_obj, **validated_data)
+                    for employee_obj in unique_employees
+                ]
+        except IntegrityError as exc:
+            return Response(
+                {
+                    "error": (
+                        "A payslip already exists for one of the selected employees "
+                        "in the given date range."
+                    ),
+                    "details": str(exc),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        response_serializer = PayslipNewSerializer(created_payslips, many=True)
+
+        if len(created_payslips) == 1:
+            return Response(response_serializer.data[0], status=status.HTTP_201_CREATED)
+
+        return Response(
+            {
+                "message": "Payslips generated successfully.",
+                "count": len(created_payslips),
+                "results": response_serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
     @method_decorator(permission_required("payroll.change_payslipnew"))
     def put(self, request, id):

@@ -174,6 +174,99 @@ class PayslipNewSerializer(serializers.ModelSerializer):
         return obj.work_type or self._workinfo_value(obj, 'Work_Type_Name')
 
 
+class PayslipNewCreateRequestSerializer(serializers.ModelSerializer):
+    employee = serializers.JSONField(required=False, write_only=True)
+    employees = serializers.ListField(
+        child=serializers.IntegerField(), required=False, write_only=True
+    )
+
+    class Meta:
+        model = PayslipNew
+        fields = [
+            "employee",
+            "employees",
+            "start_date",
+            "end_date",
+            "lop_days",
+            "gross_wages",
+            "basic",
+            "hra",
+            "conveyance_allowance",
+            "medical_allowance",
+            "other_allowances",
+            "epf",
+            "esi",
+            "professional_tax",
+            "deduction_amount",
+            "deduction_description",
+            "status",
+        ]
+
+    def validate(self, attrs):
+        employee = attrs.pop("employee", None)
+        employees = attrs.pop("employees", None)
+
+        if employee is not None and employees:
+            raise serializers.ValidationError(
+                {"employee": "Use either 'employee' or 'employees', not both."}
+            )
+
+        normalized_employee_ids = []
+        if isinstance(employee, list):
+            normalized_employee_ids.extend(employee)
+        elif employee is not None:
+            normalized_employee_ids.append(employee)
+
+        if employees:
+            normalized_employee_ids.extend(employees)
+
+        if not normalized_employee_ids:
+            raise serializers.ValidationError(
+                {"employee": "This field is required."}
+            )
+
+        if attrs["end_date"] < attrs["start_date"]:
+            raise serializers.ValidationError(
+                {"end_date": "End date must be greater than or equal to start date."}
+            )
+
+        request = self.context.get("request")
+        is_admin_user = bool(
+            request
+            and request.user
+            and request.user.is_authenticated
+            and (request.user.is_staff or request.user.is_superuser)
+        )
+
+        if len(normalized_employee_ids) > 1 and not is_admin_user:
+            raise serializers.ValidationError(
+                {"employee": "Only admin users can create payslips in bulk."}
+            )
+
+        try:
+            normalized_employee_ids = [int(employee_id) for employee_id in normalized_employee_ids]
+        except (TypeError, ValueError):
+            raise serializers.ValidationError(
+                {"employee": "Employee must be an integer id or a list of integer ids."}
+            )
+
+        employee_queryset = Employee.objects.filter(id__in=normalized_employee_ids)
+        employee_map = {employee.id: employee for employee in employee_queryset}
+        missing_employee_ids = [
+            employee_id for employee_id in normalized_employee_ids
+            if employee_id not in employee_map
+        ]
+        if missing_employee_ids:
+            raise serializers.ValidationError(
+                {"employee": f"Employee not found for id(s): {missing_employee_ids}"}
+            )
+
+        attrs["employees"] = [
+            employee_map[employee_id] for employee_id in normalized_employee_ids
+        ]
+        return attrs
+
+
 #######################
 #  COntract starts here
 #
