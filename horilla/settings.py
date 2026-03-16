@@ -35,6 +35,7 @@ env = environ.Env(
             "http://192.168.1.248:5174",
             "http://192.168.1.109:5173",
             "http://192.168.1.102:5175",    
+            "http://13.202.113.121:7098",
         ],
     ),
 )
@@ -268,13 +269,13 @@ USE_TZ = True
 # Production settings
 if not DEBUG:
     SECURE_BROWSER_XSS_FILTER = True
-    SECURE_SSL_REDIRECT = True
-    SECURE_HSTS_SECONDS = 31536000
-    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-    SECURE_HSTS_PRELOAD = True
+    SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=False)
+    SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0)
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False)
+    SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
     SECURE_CONTENT_TYPE_NOSNIFF = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=False)
+    CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=False)
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # REST Framework Configuration for API-only mode
 REST_FRAMEWORK = {
@@ -314,7 +315,7 @@ REST_FRAMEWORK = {
 CORS_ALLOW_ALL_ORIGINS = True  # Allow all origins (for development)
 
 # Alternatively, if you want to specify allowed origins:
-CORS_ALLOWED_ORIGINS = env(
+raw_cors_origins = env(
     "CORS_ALLOWED_ORIGINS",
     default=[
         "http://localhost:5173",  # Vite dev server
@@ -324,10 +325,13 @@ CORS_ALLOWED_ORIGINS = env(
         "http://127.0.0.1:3000",  # React dev server
         "http://127.0.0.1:8000",
         "http://192.168.1.192:5173",
-        "http://192.168.1.247:5176/",  # Django development
+        "http://192.168.1.247:5176",  # Django development
+        "http://13.202.113.121:7098", # Production IP
     ],
     cast=list,
 )
+
+CORS_ALLOWED_ORIGINS = [origin.rstrip("/") for origin in raw_cors_origins]
 
 CORS_ALLOW_CREDENTIALS = True  # Allow credentials (cookies, auth headers)
 
@@ -350,7 +354,7 @@ CACHES = {
 
 # Email Configuration - Use File-Based Backend for Debugging/Testing
 # Emails are saved to disk so you can see what was sent
-EMAIL_BACKEND = "django.core.mail.backends.filebased.EmailBackend"
+EMAIL_BACKEND = env("EMAIL_BACKEND", default="base.backends.ConfiguredEmailBackend")
 EMAIL_FILE_PATH = os.path.join(BASE_DIR, "emails")
 BREVO_API_KEY = env("BREVO_API_KEY", default="")
 BREVO_FROM_EMAIL = env("BREVO_FROM_EMAIL", default="noreply@horilla.com")

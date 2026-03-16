@@ -5513,6 +5513,8 @@ from rest_framework.views import APIView
 from leave.leaveserializer import (
     LeaveNewAdminReadSerializer,
     LeaveNewAdminUpdateSerializer,
+    LeaveNewCreateSerializer,
+    LeaveNewEmployeeReadSerializer,
 )
 from leave.models import LeaveNew
 
@@ -5521,40 +5523,98 @@ class AdminLeaveAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     # 🔹 ADMIN: GET ALL LEAVES
-    @method_decorator(permission_required("leave.view_leavenew", raise_exception=True))
     def get(self, request):
-        leaves = LeaveNew.objects.select_related("employee").order_by("-created_at")
-        serializer = LeaveNewAdminReadSerializer(leaves, many=True)
+        if request.user.has_perm("leave.view_leavenew"):
+            leaves = LeaveNew.objects.select_related("employee").order_by("-created_at")
+            serializer = LeaveNewAdminReadSerializer(leaves, many=True)
+        else:
+            leaves = LeaveNew.objects.filter(employee=request.user.employee_get).order_by(
+                "-created_at"
+            )
+            serializer = LeaveNewEmployeeReadSerializer(leaves, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     # 🔹 ADMIN: UPDATE STATUS + COMMENTS
-    @method_decorator(
-        permission_required("leave.change_leavenew", raise_exception=True)
-    )
+    def post(self, request):
+        serializer = LeaveNewCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = dict(serializer.validated_data)
+        validated_data.pop("end_date_breakdown", None)
+
+        leave = LeaveNew.objects.create(
+            employee=request.user.employee_get, **validated_data
+        )
+
+        return Response(
+            {
+                "message": "Leave request submitted successfully",
+                "leave_id": leave.id,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
     def put(self, request, pk):
+        if request.user.has_perm("leave.change_leavenew"):
+            try:
+                leave = LeaveNew.objects.get(pk=pk)
+            except LeaveNew.DoesNotExist:
+                return Response(
+                    {"error": "Leave not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if leave.status == "cancelled":
+                return Response(
+                    {"error": "Cannot update a cancelled leave"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            serializer = LeaveNewAdminUpdateSerializer(
+                leave,
+                data=request.data,
+                partial=True,
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+            return Response(
+                {"message": "Leave status updated successfully"},
+                status=status.HTTP_200_OK,
+            )
+
         try:
-            leave = LeaveNew.objects.get(pk=pk)
+            leave = LeaveNew.objects.get(pk=pk, employee=request.user.employee_get)
         except LeaveNew.DoesNotExist:
             return Response(
                 {"error": "Leave not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if leave.status == "cancelled":
+
+        if leave.status != "requested":
             return Response(
-                {"error": "Cannot update a cancelled leave"},
+                {"error": "Only requested leaves can be updated"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if request.data.get("status") != "cancelled":
+            return Response(
+                {"error": "Employees can only cancel their own requested leaves"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        employee_cancel_data = {"status": "cancelled"}
+        if "comments" in request.data:
+            employee_cancel_data["comments"] = request.data.get("comments", "")
+
         serializer = LeaveNewAdminUpdateSerializer(
             leave,
-            data=request.data,
+            data=employee_cancel_data,
             partial=True,
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
 
         return Response(
-            {"message": "Leave status updated successfully"},
+            {"message": "Leave request cancelled successfully"},
             status=status.HTTP_200_OK,
         )
 
