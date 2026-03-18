@@ -7,7 +7,7 @@ from ...api_views.auth.views import (
 )
 
 urlpatterns = [
-    path("login/", LoginAPIView.as_view()),
+    path("login/", LoginAPIView.as_view(), name="login"),
     path("forgot-password/", ForgotPasswordAPIView.as_view()),
     path("reset-password/", ResetPasswordAPIView.as_view()),
 ]

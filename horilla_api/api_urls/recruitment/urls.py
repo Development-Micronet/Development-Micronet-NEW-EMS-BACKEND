@@ -1,5 +1,7 @@
-from django.urls import path
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
 
+from recruitment.api_apply_now import ApplyNowViewSet
 from horilla_api.api_views.recruitment.views import (
     RecruitmentCandidateAPIView,
     RecruitmentInterviewAPIView,
@@ -11,7 +13,11 @@ from horilla_api.api_views.recruitment.views import (
     RecruitmentSurveyTemplateAPIView,
 )
 
+router = DefaultRouter()
+router.register(r'apply-now', ApplyNowViewSet, basename='apply-now')
+
 urlpatterns = [
+    path("", include(router.urls)),
     path("candidates/", RecruitmentCandidateAPIView.as_view(), name="recruitment-candidate-list"),
     path(
         "candidates/<int:pk>/",

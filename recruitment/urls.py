@@ -4,6 +4,7 @@ urls.py
 This module is used to map url path with view methods.
 """
 
+
 from django.urls import path
 
 import recruitment.views.actions

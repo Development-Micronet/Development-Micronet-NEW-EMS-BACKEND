@@ -232,9 +232,6 @@ class Recruitment(HorillaModel):
             else self.title
         )
 
-        if not self.is_event_based and self.job_position_id is not None:
-            self.open_positions.add(self.job_position_id)
-
         return title
 
     def clean(self):
@@ -263,6 +260,8 @@ class Recruitment(HorillaModel):
         super().save(*args, **kwargs)  # Save the Recruitment instance first
         if self.is_event_based and self.open_positions is None:
             raise ValidationError({"open_positions": _("This field is required")})
+        if not self.is_event_based and self.job_position_id is not None:
+            self.open_positions.add(self.job_position_id)
 
     def ordered_stages(self):
         """
@@ -374,7 +373,7 @@ class Candidate(HorillaModel):
     portfolio = models.URLField(max_length=200, blank=True)
     recruitment_id = models.ForeignKey(
         Recruitment,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         null=True,
         related_name="candidate",
         verbose_name=_("Recruitment"),
@@ -388,7 +387,7 @@ class Candidate(HorillaModel):
     )
     stage_id = models.ForeignKey(
         Stage,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         null=True,
         verbose_name=_("Stage"),
     )
@@ -592,12 +591,16 @@ class Candidate(HorillaModel):
         if self.stage_id is not None:
             self.hired = self.stage_id.stage_type == "hired"
 
-        if not self.recruitment_id.is_event_based and self.job_position_id is None:
-            self.job_position_id = self.recruitment_id.job_position_id
-        if self.job_position_id not in self.recruitment_id.open_positions.all():
-            raise ValidationError({"job_position_id": _("Choose valid choice")})
-        if self.recruitment_id.is_event_based and self.job_position_id is None:
-            raise ValidationError({"job_position_id": _("This field is required.")})
+        if self.recruitment_id is not None:
+            if not self.recruitment_id.is_event_based and self.job_position_id is None:
+                self.job_position_id = self.recruitment_id.job_position_id
+            if self.job_position_id not in self.recruitment_id.open_positions.all():
+                raise ValidationError({"job_position_id": _("Choose valid choice")})
+            if self.recruitment_id.is_event_based and self.job_position_id is None:
+                raise ValidationError({"job_position_id": _("This field is required.")})
+        else:
+            raise ValidationError({"recruitment_id": _("This field is required.")})
+
         if self.stage_id and self.stage_id.stage_type == "cancelled":
             self.canceled = True
         if self.canceled:
@@ -679,7 +682,7 @@ class RejectedCandidate(HorillaModel):
 
     candidate_id = models.OneToOneField(
         Candidate,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         verbose_name="Candidate",
         related_name="rejected_candidate",
     )
@@ -824,7 +827,7 @@ class RecruitmentSurveyAnswer(HorillaModel):
     candidate_id = models.ForeignKey(Candidate, on_delete=models.CASCADE)
     recruitment_id = models.ForeignKey(
         Recruitment,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         verbose_name=_("Recruitment"),
         null=True,
     )
@@ -894,7 +897,7 @@ class SkillZoneCandidate(HorillaModel):
     )
     candidate_id = models.ForeignKey(
         Candidate,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         null=True,
         related_name="skillzonecandidate_set",
         verbose_name=_("Candidate"),
@@ -941,7 +944,7 @@ class CandidateRating(HorillaModel):
         Employee, on_delete=models.PROTECT, related_name="candidate_rating"
     )
     candidate_id = models.ForeignKey(
-        Candidate, on_delete=models.PROTECT, related_name="candidate_rating"
+        Candidate, on_delete=models.CASCADE, related_name="candidate_rating"
     )
     rating = models.IntegerField(
         validators=[MinValueValidator(0), MaxValueValidator(5)]
@@ -1046,7 +1049,7 @@ class CandidateDocumentRequest(HorillaModel):
 class CandidateDocument(HorillaModel):
     title = models.CharField(max_length=250)
     candidate_id = models.ForeignKey(
-        Candidate, on_delete=models.PROTECT, verbose_name="Candidate"
+        Candidate, on_delete=models.CASCADE, verbose_name="Candidate"
     )
     document_request_id = models.ForeignKey(
         CandidateDocumentRequest, on_delete=models.PROTECT, null=True
