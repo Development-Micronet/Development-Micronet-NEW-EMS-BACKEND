@@ -494,7 +494,11 @@ class RecruitmentPipelineSerializer(serializers.ModelSerializer):
 
 class RecruitmentSurveyTemplateSerializer(serializers.ModelSerializer):
     company = serializers.PrimaryKeyRelatedField(
-        source="company_id", queryset=Company.objects.all(), write_only=True
+        source="company_id",
+        queryset=Company.objects.all(),
+        write_only=True,
+        required=False,
+        allow_null=True,
     )
     company_data = serializers.SerializerMethodField(read_only=True)
 
@@ -507,6 +511,45 @@ class RecruitmentSurveyTemplateSerializer(serializers.ModelSerializer):
             "company",
             "company_data",
         ]
+
+    def _get_default_company(self):
+        request = self.context.get("request")
+        request_employee = getattr(getattr(request, "user", None), "employee_get", None)
+        employee_company = (
+            request_employee.get_company()
+            if request_employee and hasattr(request_employee, "get_company")
+            else None
+        )
+        return employee_company or Company.objects.filter(hq=True).first() or Company.objects.first()
+
+    def to_internal_value(self, data):
+        if hasattr(data, "copy"):
+            mutable = data.copy()
+        else:
+            mutable = dict(data)
+
+        company_value = mutable.get("company")
+        if company_value not in (None, ""):
+            try:
+                company_pk = int(company_value)
+            except (TypeError, ValueError):
+                mutable.pop("company", None)
+            else:
+                if not Company.objects.filter(pk=company_pk).exists():
+                    fallback_company = self._get_default_company()
+                    if fallback_company:
+                        mutable["company"] = str(fallback_company.pk)
+                    else:
+                        mutable.pop("company", None)
+
+        return super().to_internal_value(mutable)
+
+    def create(self, validated_data):
+        if not validated_data.get("company_id"):
+            fallback_company = self._get_default_company()
+            if fallback_company:
+                validated_data["company_id"] = fallback_company
+        return super().create(validated_data)
 
     def get_company_data(self, obj):
         if not obj.company_id:

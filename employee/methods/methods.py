@@ -88,7 +88,7 @@ def import_valid_date(date_value, field_label, errors_dict, error_key):
         return date_value.date()
 
     date_str = str(date_value).strip()
-    date_formats = ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"]
+    date_formats = ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y", "%Y/%m/%d"]
 
     for fmt in date_formats:
         try:
@@ -97,7 +97,7 @@ def import_valid_date(date_value, field_label, errors_dict, error_key):
             continue
 
     errors_dict[error_key] = (
-        f"{field_label} is not a valid date. Expected formats: YYYY-MM-DD, DD/MM/YYYY"
+        f"{field_label} is not a valid date. Expected formats: YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY"
     )
     return None
 

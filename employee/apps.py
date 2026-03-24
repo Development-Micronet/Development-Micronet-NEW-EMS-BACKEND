@@ -19,3 +19,11 @@ class EmployeeConfig(AppConfig):
 
     default_auto_field = "django.db.models.BigAutoField"
     name = "employee"
+
+    def ready(self):
+        """
+        This method is called when the app is ready.
+        Import signals here to ensure they are connected.
+        """
+        import employee.models  # noqa
+

@@ -7,6 +7,7 @@ from base.models import Company
 from employee.models import Employee
 from horilla.horilla_middlewares import _thread_locals
 from offboarding.models import Offboarding, ResignationLetter
+from recruitment.models import SurveyTemplate
 
 
 class AuthRecruitmentOffboardingAPITest(TestCase):
@@ -90,3 +91,24 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         assert data["planned_to_leave_on"] == "2026-04-15"
         assert data["status"] == "Requested"
         assert ResignationLetter.objects.filter(employee_id=self.employee).exists()
+
+    def test_survey_template_create_falls_back_when_company_pk_is_invalid(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            "/api/recruitment/survey-templates/",
+            {
+                "title": "API Survey Template",
+                "description": "Created through API",
+                "company": 999,
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        data = response.json()["data"]
+        assert data["title"] == "API Survey Template"
+        assert data["company"]["id"] == self.company.id
+        assert SurveyTemplate.objects.filter(
+            title="API Survey Template", company_id=self.company
+        ).exists()

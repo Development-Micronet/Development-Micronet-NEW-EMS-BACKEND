@@ -30,6 +30,7 @@ from attendance.models import (
     AttendanceLateComeEarlyOut,
     GraceTime,
 )
+from attendance.signals import sync_work_record_from_attendance
 from attendance.views.views import attendance_validate
 from base.context_processors import (
     enable_late_come_early_out_tracking,
@@ -193,10 +194,12 @@ def clock_in_attendance_and_activity(
         attendance.attendance_clock_in = now
         attendance.attendance_clock_in_date = date_today
         attendance.minimum_hour = minimum_hour
+        attendance.attendance_validated = True
         attendance.save()
         # check here late come or not
 
         attendance = Attendance.find(attendance.id)
+        sync_work_record_from_attendance(attendance)
         late_come(
             attendance=attendance, start_time=start_time, end_time=end_time, shift=shift
         )
@@ -204,7 +207,9 @@ def clock_in_attendance_and_activity(
         attendance = attendance[0]
         attendance.attendance_clock_out = None
         attendance.attendance_clock_out_date = None
+        attendance.attendance_validated = True
         attendance.save()
+        sync_work_record_from_attendance(attendance)
         # delete if the attendance marked the early out
         early_out_instance = attendance.late_come_early_out.filter(type="early_out")
         if early_out_instance.exists():
@@ -414,9 +419,11 @@ def clock_out_attendance_and_activity(employee, date_today, now, out_datetime=No
         # Overtime calculation
         attendance.attendance_overtime = overtime_calculation(attendance)
 
-        # Validate the attendance as per the condition
-        attendance.attendance_validated = attendance_validate(attendance)
+        # Business rule: once attendance is marked through check-in/check-out,
+        # keep it validated so it appears as present in attendance views.
+        attendance.attendance_validated = True
         attendance.save()
+        sync_work_record_from_attendance(attendance)
 
         return attendance
 

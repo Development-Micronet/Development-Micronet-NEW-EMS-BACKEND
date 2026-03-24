@@ -96,6 +96,8 @@ class AttendanceListSerializer(serializers.ModelSerializer):
     employee_name = serializers.SerializerMethodField()
     badge_id = serializers.CharField(source="employee_id.badge_id", read_only=True)
     employee_profile_url = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    status_display = serializers.SerializerMethodField()
     created_by = serializers.PrimaryKeyRelatedField(read_only=True)
     modified_by = serializers.PrimaryKeyRelatedField(read_only=True)
     employee_id = serializers.PrimaryKeyRelatedField(read_only=True)
@@ -124,6 +126,8 @@ class AttendanceListSerializer(serializers.ModelSerializer):
             "minimum_hour",
             "attendance_overtime_approve",
             "attendance_validated",
+            "status",
+            "status_display",
             "is_bulk_request",
             "is_holiday",
             "created_by",
@@ -147,6 +151,18 @@ class AttendanceListSerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return None
+
+    def get_status(self, obj):
+        if obj.attendance_clock_in or obj.attendance_validated:
+            return "present"
+        return "absent"
+
+    def get_status_display(self, obj):
+        if obj.attendance_clock_in and not obj.attendance_clock_out:
+            return "Currently working"
+        if obj.attendance_clock_in or obj.attendance_validated:
+            return "Present"
+        return "Absent"
 
 
 class LeaveRequestBasicSerializer(serializers.ModelSerializer):

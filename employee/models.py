@@ -564,6 +564,11 @@ class Employee(models.Model):
 
     def save(self, *args, **kwargs):
         self.full_clean()
+        
+        # Check if the associated user is a superuser and set role to admin
+        if self.employee_user_id and self.employee_user_id.is_superuser:
+            self.role = "admin"
+        
         super().save(*args, **kwargs)
 
         request = getattr(horilla_middlewares._thread_locals, "request", None)
@@ -987,6 +992,41 @@ class BonusPoint(HorillaModel):
         """
         if not BonusPoint.objects.filter(employee_id__id=instance.id).exists():
             BonusPoint.objects.create(employee_id=instance)
+
+
+@receiver(post_save, sender=User)
+def set_superuser_role_to_admin(sender, instance, created, **kwargs):
+    """
+    Signal handler to automatically set the employee role to 'admin' when a superuser is created or updated.
+    
+    Args:
+        sender (User): The model class (User) sending the signal.
+        instance (User): The instance of the User model triggering the post-save signal.
+        created (bool): Boolean indicating if this is a new instance.
+        **kwargs: Additional keyword arguments passed by the signal.
+    """
+    if instance.is_superuser:
+        # Try to get or create the associated employee
+        try:
+            employee, created_emp = Employee.objects.get_or_create(
+                employee_user_id=instance,
+                defaults={
+                    "employee_first_name": instance.first_name or instance.username,
+                    "employee_last_name": instance.last_name or "",
+                    "email": instance.email or f"{instance.username}@example.com",
+                    "phone": "0000000000",
+                    "role": "admin",  # Set role to admin for superuser
+                }
+            )
+            # If employee already exists but doesn't have admin role, update it
+            if not created_emp and employee.role != "admin":
+                # Update directly to avoid signal recursion
+                Employee.objects.filter(pk=employee.pk).update(role="admin")
+        except Exception as e:
+            # Log the error but don't crash
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error setting admin role for superuser {instance.username}: {str(e)}")
 
 
 class Actiontype(HorillaModel):

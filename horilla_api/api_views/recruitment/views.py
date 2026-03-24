@@ -155,7 +155,9 @@ class RecruitmentSurveyTemplateAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = RecruitmentSurveyTemplateSerializer(data=request.data)
+        serializer = RecruitmentSurveyTemplateSerializer(
+            data=request.data, context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(
@@ -169,11 +171,15 @@ class RecruitmentSurveyTemplateAPIView(APIView):
     def get(self, request, pk=None):
         if pk:
             instance = get_object_or_404(SurveyTemplate, pk=pk)
-            serializer = RecruitmentSurveyTemplateSerializer(instance)
+            serializer = RecruitmentSurveyTemplateSerializer(
+                instance, context={"request": request}
+            )
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         queryset = SurveyTemplate.objects.select_related("company_id").order_by("-id")
-        serializer = RecruitmentSurveyTemplateSerializer(queryset, many=True)
+        serializer = RecruitmentSurveyTemplateSerializer(
+            queryset, many=True, context={"request": request}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, pk=None):
@@ -184,7 +190,7 @@ class RecruitmentSurveyTemplateAPIView(APIView):
             )
         instance = get_object_or_404(SurveyTemplate, pk=pk)
         serializer = RecruitmentSurveyTemplateSerializer(
-            instance, data=request.data, partial=True
+            instance, data=request.data, partial=True, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()

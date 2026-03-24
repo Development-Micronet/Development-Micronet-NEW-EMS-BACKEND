@@ -1,6 +1,10 @@
+from rest_framework import status
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from ...api_decorators.base.decorators import manager_permission_required
 
 
 class OnlineOfflineEmployeesAPIView(APIView):
@@ -75,6 +79,48 @@ class AttendanceBulkValidateView(APIView):
             attendance_validated=True
         )
         return Response({"validated": updated, "errors": []}, status=200)
+
+
+class AttendanceImportAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    @manager_permission_required("attendance.add_attendance")
+    def post(self, request):
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response({"error": "No file uploaded."}, status=400)
+
+        try:
+            data_frame = read_import_file(upload)
+            valid, error_message = validate_headers(
+                data_frame, ATTENDANCE_IMPORT_HEADERS
+            )
+            if not valid:
+                return Response({"error": error_message}, status=400)
+            return Response(import_attendance_dataframe(data_frame), status=200)
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=400)
+
+
+class WorkRecordImportAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    @manager_permission_required("attendance.add_attendance")
+    def post(self, request):
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response({"error": "No file uploaded."}, status=400)
+
+        try:
+            data_frame = read_import_file(upload)
+            valid, error_message = validate_headers(data_frame, ["Employee"])
+            if not valid:
+                return Response({"error": error_message}, status=400)
+            return Response(import_work_record_dataframe(data_frame), status=200)
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=400)
 
 
 # API: /attendance/overtime/pending/
@@ -203,6 +249,10 @@ class OnBreakEmployeesAPIView(APIView):
 
 from attendance.models import Attendance, AttendanceActivity, EmployeeShiftDay
 from attendance.views.clock_in_out import *
+from attendance.signals import (
+    sync_work_record_from_attendance,
+    sync_work_records_from_attendances,
+)
 
 logger = logging.getLogger(__name__)
 from attendance.views.dashboard import (
@@ -221,6 +271,13 @@ from ...api_decorators.base.decorators import (
     permission_required,
 )
 from ...api_methods.base.methods import groupby_queryset, permission_based_queryset
+from ...api_methods.import_data import (
+    ATTENDANCE_IMPORT_HEADERS,
+    import_attendance_dataframe,
+    import_work_record_dataframe,
+    read_import_file,
+    validate_headers,
+)
 from ...api_serializers.attendance.serializers import (
     AttendanceActivitySerializer,
     AttendanceLateComeEarlyOutSerializer,
@@ -230,6 +287,7 @@ from ...api_serializers.attendance.serializers import (
     MailTemplateSerializer,
     UserAttendanceDetailedSerializer,
     UserAttendanceListSerializer,
+    WorkRecordSerializer,
 )
 from ...docs import document_api
 
@@ -373,17 +431,18 @@ class ClockInAPIView(APIView):
                 attendance.attendance_clock_in_date = resumed_clock_in_date
                 attendance.attendance_clock_in = resumed_clock_in
             attendance.is_active = True
+            attendance.attendance_validated = True
 
             # Manually sync the late come flag from activity to parent if needed
             attendance.is_late_come = activity.is_late_come
             attendance.save()
+            sync_work_record_from_attendance(attendance)
 
-            employee.is_active = True
-            employee.save()
             # Only update the flag if it hasn't been marked Late yet
             if activity.is_late_come:
                 attendance.is_late_come = True
             attendance.save()
+            sync_work_record_from_attendance(attendance)
             # 4. Return the new fields in the response
             return Response(
                 {
@@ -468,13 +527,13 @@ class ClockOutAPIView(APIView):
         attendance.attendance_clock_out = now_time
         attendance.attendance_clock_out_date = current_date
         attendance.is_active = False
+        attendance.attendance_validated = True
 
         # Optional: Sync the early out flag to the main Attendance record
         attendance.is_early_out = activity_instance.is_early_out
         attendance.save()
+        sync_work_record_from_attendance(attendance)
 
-        employee.is_active = False
-        employee.save()
         # Only update Early Out if this is actually the last activity
         if activity_instance.is_early_out:
             attendance.is_early_out = True
@@ -483,6 +542,7 @@ class ClockOutAPIView(APIView):
             # we might need to reset it.
             attendance.is_early_out = False
         attendance.save()
+        sync_work_record_from_attendance(attendance)
         return Response(
             {
                 "message": "Clocked-Out",
@@ -654,15 +714,37 @@ class AttendanceView(APIView):
         check_out = self._as_time(att.attendance_clock_out)
         is_late = check_in is not None and check_in > self.LATE_COME_THRESHOLD
         is_early = check_out is not None and check_out < self.EARLY_OUT_THRESHOLD
+        if att.attendance_clock_in:
+            status = "present"
+            status_display = "Currently working"
+            work_record_type = "FDP"
+            if att.attendance_clock_out:
+                status_display = "Present"
+        elif att.attendance_validated:
+            status = "present"
+            status_display = "Present"
+            work_record_type = "FDP"
+        else:
+            status = "absent"
+            status_display = "Absent"
+            work_record_type = "ABS"
 
         return {
             "id": att.id,
+            "employee_id": emp.id if emp else None,
+            "badge_id": emp.badge_id if emp else None,
             "employee_name": (
                 f"{emp.employee_first_name} {emp.employee_last_name}" if emp else None
             ),
             "date": str(att.attendance_date) if att.attendance_date else None,
+            "attendance_date": (
+                str(att.attendance_date) if att.attendance_date else None
+            ),
             "day": day,
             "check_in": (
+                str(att.attendance_clock_in) if att.attendance_clock_in else None
+            ),
+            "attendance_clock_in": (
                 str(att.attendance_clock_in) if att.attendance_clock_in else None
             ),
             "in_date": (
@@ -670,10 +752,23 @@ class AttendanceView(APIView):
                 if att.attendance_clock_in_date
                 else None
             ),
+            "attendance_clock_in_date": (
+                str(att.attendance_clock_in_date)
+                if att.attendance_clock_in_date
+                else None
+            ),
             "check_out": (
                 str(att.attendance_clock_out) if att.attendance_clock_out else None
             ),
+            "attendance_clock_out": (
+                str(att.attendance_clock_out) if att.attendance_clock_out else None
+            ),
             "out_date": (
+                str(att.attendance_clock_out_date)
+                if att.attendance_clock_out_date
+                else None
+            ),
+            "attendance_clock_out_date": (
                 str(att.attendance_clock_out_date)
                 if att.attendance_clock_out_date
                 else None
@@ -686,6 +781,10 @@ class AttendanceView(APIView):
                 att.hours_pending() if hasattr(att, "hours_pending") else None
             ),
             "overtime": att.attendance_overtime,
+            "attendance_validated": att.attendance_validated,
+            "status": status,
+            "status_display": status_display,
+            "work_record_type": work_record_type,
             "latecome": is_late,
             "earlyout": is_early,
         }
@@ -1645,19 +1744,42 @@ class AttendanceWorkRecordsAPIView(APIView):
 
     def get(self, request):
         user = request.user
-        qs = Attendance.objects.all()
+        from attendance.models import WorkRecords
+
+        qs = WorkRecords.objects.entire().select_related(
+            "employee_id", "attendance_id", "shift_id"
+        )
+        attendance_qs = Attendance.objects.entire().select_related(
+            "employee_id", "shift_id"
+        ).filter(attendance_clock_in__isnull=False)
+        accessible_employees = filtersubordinatesemployeemodel(
+            request,
+            EmployeeFilter(request.GET or None).qs,
+            "attendance.view_attendance",
+        )
+        request_employee = getattr(user, "employee_get", None)
+        accessible_employees = list(accessible_employees)
+        if request_employee is not None:
+            accessible_employees = list(
+                dict.fromkeys([request_employee, *accessible_employees])
+            )
+        else:
+            accessible_employees = list(dict.fromkeys(accessible_employees))
+        if accessible_employees:
+            qs = qs.filter(employee_id__in=accessible_employees)
+            attendance_qs = attendance_qs.filter(employee_id__in=accessible_employees)
         month = request.GET.get("month")
         employee_id = request.GET.get("employee_id")
-        if not user.is_superuser and not user.is_staff:
-            qs = qs.filter(employee_id=user.employee_get.id)
         if employee_id:
             qs = qs.filter(employee_id=employee_id)
+            attendance_qs = attendance_qs.filter(employee_id=employee_id)
         if month:
             try:
                 year, month_num = map(int, month.split("-"))
                 if month_num < 1 or month_num > 12:
                     raise ValueError("month out of range")
-                qs = qs.filter(
+                qs = qs.filter(date__year=year, date__month=month_num)
+                attendance_qs = attendance_qs.filter(
                     attendance_date__year=year, attendance_date__month=month_num
                 )
             except Exception:
@@ -1665,6 +1787,7 @@ class AttendanceWorkRecordsAPIView(APIView):
                     {"error": "Invalid month format. Use YYYY-MM (e.g., 2026-03)."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-        qs = qs.order_by("-attendance_date")
-        serializer = UserAttendanceDetailedSerializer(qs, many=True)
+        sync_work_records_from_attendances(attendance_qs)
+        qs = qs.order_by("-date", "-id")
+        serializer = WorkRecordSerializer(qs, many=True)
         return Response(serializer.data)

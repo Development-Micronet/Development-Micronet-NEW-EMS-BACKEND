@@ -330,3 +330,85 @@ class UserAttendanceDetailedSerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return None
+
+
+class WorkRecordSerializer(serializers.ModelSerializer):
+    employee_name = serializers.SerializerMethodField()
+    badge_id = serializers.CharField(source="employee_id.badge_id", read_only=True)
+    status = serializers.SerializerMethodField()
+    status_display = serializers.SerializerMethodField()
+    attendance_date = serializers.DateField(source="date", read_only=True)
+    attendance_clock_in = serializers.TimeField(
+        source="attendance_id.attendance_clock_in", read_only=True
+    )
+    attendance_clock_in_date = serializers.DateField(
+        source="attendance_id.attendance_clock_in_date", read_only=True
+    )
+    attendance_clock_out = serializers.TimeField(
+        source="attendance_id.attendance_clock_out", read_only=True
+    )
+    attendance_clock_out_date = serializers.DateField(
+        source="attendance_id.attendance_clock_out_date", read_only=True
+    )
+    shift_name = serializers.CharField(source="shift_id.employee_shift", read_only=True)
+
+    class Meta:
+        model = WorkRecords
+        fields = [
+            "id",
+            "record_name",
+            "work_record_type",
+            "status",
+            "status_display",
+            "employee_id",
+            "employee_name",
+            "badge_id",
+            "date",
+            "attendance_date",
+            "at_work",
+            "min_hour",
+            "message",
+            "is_attendance_record",
+            "is_leave_record",
+            "attendance_id",
+            "attendance_clock_in",
+            "attendance_clock_in_date",
+            "attendance_clock_out",
+            "attendance_clock_out_date",
+            "shift_id",
+            "shift_name",
+            "day_percentage",
+            "last_update",
+        ]
+
+    def get_employee_name(self, obj):
+        employee = getattr(obj, "employee_id", None)
+        if employee:
+            return (
+                f"{employee.employee_first_name} {employee.employee_last_name or ''}"
+            ).strip()
+        return None
+
+    def get_status(self, obj):
+        if obj.work_record_type == "FDP":
+            return "present"
+        if obj.work_record_type == "HDP":
+            return "half_day_present"
+        if obj.work_record_type == "CONF":
+            return "conflict"
+        if obj.work_record_type == "HD":
+            return "holiday"
+        if obj.work_record_type == "DFT":
+            return "draft"
+        return "absent"
+
+    def get_status_display(self, obj):
+        status_map = {
+            "FDP": "Present",
+            "HDP": "Half Day Present",
+            "ABS": "Absent",
+            "HD": "Holiday",
+            "CONF": "Conflict",
+            "DFT": "Draft",
+        }
+        return status_map.get(obj.work_record_type, "Absent")

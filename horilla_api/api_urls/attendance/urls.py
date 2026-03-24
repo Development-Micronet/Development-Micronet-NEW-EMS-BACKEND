@@ -27,6 +27,16 @@ urlpatterns = [
         AttendanceBulkValidateView.as_view(),
         name="attendance-bulk-validate",
     ),
+    path(
+        "attendance/import/",
+        AttendanceImportAPIView.as_view(),
+        name="attendance-import-api",
+    ),
+    path(
+        "attendance/work-record-import/",
+        WorkRecordImportAPIView.as_view(),
+        name="work-record-import-api",
+    ),
     path("overtime/pending/", OvertimePendingView.as_view(), name="overtime-pending"),
     path(
         "offline-employees/",

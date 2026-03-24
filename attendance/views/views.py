@@ -99,6 +99,7 @@ from attendance.models import (
     GraceTime,
     WorkRecords,
 )
+from attendance.signals import sync_work_records_from_attendances
 from attendance.views.handle_attendance_errors import handle_attendance_errors
 from attendance.views.process_attendance_data import process_attendance_data
 from base.forms import AttendanceAllowedIPForm, TrackLateComeEarlyOutForm
@@ -2311,7 +2312,12 @@ def work_records_change_month(request):
     except ValueError:
         year, month = date.today().year, date.today().month
 
-    employees = [request.user.employee_get] + list(employees)
+    request_employee = getattr(request.user, "employee_get", None)
+    employees = list(employees)
+    if request_employee is not None:
+        employees = list(dict.fromkeys([request_employee, *employees]))
+    else:
+        employees = list(dict.fromkeys(employees))
 
     month_dates = [
         datetime(year, month, day).date()
@@ -2320,7 +2326,14 @@ def work_records_change_month(request):
         if day
     ]
 
-    work_records = WorkRecords.objects.filter(
+    attendances = Attendance.objects.entire().filter(
+        attendance_date__in=month_dates,
+        employee_id__in=employees,
+        attendance_clock_in__isnull=False,
+    ).select_related("employee_id", "shift_id")
+    sync_work_records_from_attendances(attendances)
+
+    work_records = WorkRecords.objects.entire().filter(
         date__in=month_dates, employee_id__in=employees
     ).select_related("employee_id", "shift_id", "attendance_id")
 
@@ -2359,7 +2372,7 @@ def work_record_export(request):
         return HttpResponseBadRequest("Invalid month or year parameter.")
 
     employees = EmployeeFilter(request.GET).qs
-    records = WorkRecords.objects.filter(date__month=month, date__year=year)
+    records = WorkRecords.objects.entire().filter(date__month=month, date__year=year)
     num_days = calendar.monthrange(year, month)[1]
     all_date_objects = [date(year, month, day) for day in range(1, num_days + 1)]
     leave_dates = set(monthly_leave_days(month, year))

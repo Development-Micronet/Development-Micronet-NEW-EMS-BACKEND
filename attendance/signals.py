@@ -14,10 +14,11 @@ from employee.models import Employee
 from horilla.methods import get_horilla_model_class
 
 
-@receiver(post_save, sender=Attendance)
-def attendance_post_save(sender, instance, **kwargs):
+def sync_work_record_from_attendance(instance):
     """
-    Handle post-save actions for Attendance model.
+    Synchronize the attendance work record with the latest attendance state.
+    Uses the unfiltered queryset so records remain consistent even when company
+    session filters would otherwise hide null-company employees.
     """
     min_hour_second = strtime_seconds(instance.minimum_hour)
     at_work_second = strtime_seconds(instance.attendance_worked_hour)
@@ -30,20 +31,16 @@ def attendance_post_save(sender, instance, **kwargs):
         status, message = "HDP", _("Incomplete minimum hour")
     else:
         status, message = "ABS", _("Incomplete half minimum hour")
-    try:
-        work_record, created = WorkRecords.objects.get_or_create(
+    work_records = WorkRecords.objects.entire().filter(
+        date=instance.attendance_date,
+        employee_id=instance.employee_id,
+    ).order_by("-is_attendance_record", "-last_update", "-id")
+    work_record = work_records.first()
+    if work_record is None:
+        work_record = WorkRecords(
             date=instance.attendance_date,
             employee_id=instance.employee_id,
         )
-    except WorkRecords.MultipleObjectsReturned:
-        work_records = WorkRecords.objects.filter(
-            date=instance.attendance_date,
-            employee_id=instance.employee_id,
-        )
-        work_record = work_records.first()
-        work_records.exclude(id=work_record.id).delete()
-    except Exception as e:
-        print(e)
 
     work_record.employee_id = instance.employee_id
     work_record.date = instance.attendance_date
@@ -67,12 +64,47 @@ def attendance_post_save(sender, instance, **kwargs):
             _("Half day leave") if status == "HDP" else _("An approved leave exists")
         )
 
-    if not instance.attendance_clock_out:
-        status, message = "FDP", _("Currently working")
+    # Business rule: once a user has checked in, the work record should appear
+    # as present in the attendance work record for both employee and admin flows.
+    if instance.attendance_clock_in:
+        status = "FDP"
+        if work_record.is_leave_record:
+            message = _("An approved leave exists")
+        elif not instance.attendance_clock_out:
+            message = _("Currently working")
+        else:
+            message = _("Present")
 
     work_record.work_record_type = status
     work_record.message = message
     work_record.save()
+    work_records.exclude(id=work_record.id).delete()
+    return work_record
+
+
+def sync_work_records_from_attendances(attendances):
+    """
+    Self-heal work records from attendance rows.
+    This is used by list views as a safety net when older stale ABS/DFT rows
+    still exist in the database from previous buggy clock-in/out behavior.
+    """
+    synced_records = {}
+    for attendance in attendances:
+        if not attendance.attendance_clock_in:
+            continue
+        work_record = sync_work_record_from_attendance(attendance)
+        synced_records[(attendance.employee_id_id, attendance.attendance_date)] = (
+            work_record
+        )
+    return synced_records
+
+
+@receiver(post_save, sender=Attendance)
+def attendance_post_save(sender, instance, **kwargs):
+    """
+    Handle post-save actions for Attendance model.
+    """
+    sync_work_record_from_attendance(instance)
 
 
 @receiver(pre_delete, sender=Attendance)

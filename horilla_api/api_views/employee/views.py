@@ -32,6 +32,12 @@ from employee.views import work_info_export, work_info_import
 from horilla.decorators import owner_can_enter
 from horilla_api.api_decorators.base.decorators import permission_required
 from horilla_api.api_methods.employee.methods import get_next_badge_id
+from horilla_api.api_methods.import_data import (
+    EMPLOYEE_IMPORT_HEADERS,
+    import_employee_dataframe,
+    read_import_file,
+    validate_headers,
+)
 from horilla_documents.models import Document, DocumentRequest
 from notifications.signals import notify
 
@@ -466,6 +472,18 @@ class EmployeeAPIView(APIView):
 
     @method_decorator(permission_required("employee.delete_employee"))
     def delete(self, request, pk):
+        def _run_cleanup_step(operation):
+            """
+            Execute one best-effort cleanup step inside its own savepoint so a
+            failing relation does not break the outer force-delete transaction.
+            """
+            try:
+                with transaction.atomic():
+                    operation()
+            except Exception:
+                return False
+            return True
+
         def _cleanup_employee_reverse_relations(employee_obj):
             """
             Best-effort cleanup for force delete:
@@ -484,24 +502,22 @@ class EmployeeAPIView(APIView):
                     continue
 
                 if rel.many_to_many:
-                    try:
-                        related_accessor.clear()
-                    except Exception:
-                        continue
+                    _run_cleanup_step(lambda accessor=related_accessor: accessor.clear())
                     continue
 
                 rel_field_name = rel.field.name
 
                 # Reverse FK (one employee -> many related rows)
                 if rel.one_to_many:
-                    try:
-                        queryset = related_accessor.all()
-                        if rel.field.null:
-                            queryset.update(**{rel_field_name: None})
-                        else:
-                            queryset.delete()
-                    except Exception:
-                        continue
+                    queryset = related_accessor.all()
+                    if rel.field.null:
+                        _run_cleanup_step(
+                            lambda qs=queryset, field=rel_field_name: qs.update(
+                                **{field: None}
+                            )
+                        )
+                    else:
+                        _run_cleanup_step(lambda qs=queryset: qs.delete())
                     continue
 
                 # Reverse one-to-one
@@ -513,14 +529,65 @@ class EmployeeAPIView(APIView):
                     except Exception:
                         continue
 
+                    if rel.field.null:
+                        def clear_one_to_one(obj=related_obj, field=rel_field_name):
+                            setattr(obj, field, None)
+                            obj.save(update_fields=[field])
+
+                        _run_cleanup_step(clear_one_to_one)
+                    else:
+                        _run_cleanup_step(lambda obj=related_obj: obj.delete())
+
+        def _cleanup_user_reverse_relations(user_obj):
+            """
+            Best-effort cleanup for linked auth user references before deleting
+            the user record. This is needed for older tables that still behave
+            like DO_NOTHING/NO ACTION at the database level.
+            """
+            for rel in user_obj._meta.related_objects:
+                accessor_name = rel.get_accessor_name()
+                if not accessor_name:
+                    continue
+
+                try:
+                    related_accessor = getattr(user_obj, accessor_name)
+                except Exception:
+                    continue
+
+                if rel.many_to_many:
+                    _run_cleanup_step(lambda accessor=related_accessor: accessor.clear())
+                    continue
+
+                rel_field_name = rel.field.name
+
+                if rel.one_to_many:
+                    queryset = related_accessor.all()
+                    if rel.field.null:
+                        _run_cleanup_step(
+                            lambda qs=queryset, field=rel_field_name: qs.update(
+                                **{field: None}
+                            )
+                        )
+                    else:
+                        _run_cleanup_step(lambda qs=queryset: qs.delete())
+                    continue
+
+                if rel.one_to_one:
                     try:
-                        if rel.field.null:
-                            setattr(related_obj, rel_field_name, None)
-                            related_obj.save(update_fields=[rel_field_name])
-                        else:
-                            related_obj.delete()
+                        related_obj = related_accessor
+                    except rel.related_model.DoesNotExist:
+                        continue
                     except Exception:
                         continue
+
+                    if rel.field.null:
+                        def clear_user_one_to_one(obj=related_obj, field=rel_field_name):
+                            setattr(obj, field, None)
+                            obj.save(update_fields=[field])
+
+                        _run_cleanup_step(clear_user_one_to_one)
+                    else:
+                        _run_cleanup_step(lambda obj=related_obj: obj.delete())
 
         try:
             employee = Employee.objects.get(pk=pk)
@@ -568,13 +635,17 @@ class EmployeeAPIView(APIView):
                     user = employee.employee_user_id
                     employee.delete()
                     if user:
-                        user.delete()
+                        _cleanup_user_reverse_relations(user)
+                        with transaction.atomic():
+                            user.delete()
                     return Response(status=status.HTTP_204_NO_CONTENT)
 
             user = employee.employee_user_id
             employee.delete()
             if user:
-                user.delete()
+                _cleanup_user_reverse_relations(user)
+                with transaction.atomic():
+                    user.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
 
         except ProtectedError as e:
@@ -1154,10 +1225,26 @@ class EmployeeWorkInfoImportView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
 
     @manager_permission_required("employee.add_employeeworkinformation")
     def get(self, request):
         return work_info_import(request)
+
+    @manager_permission_required("employee.add_employeeworkinformation")
+    def post(self, request):
+        upload = request.FILES.get("file")
+        if not upload:
+            return Response({"error": "No file uploaded."}, status=400)
+
+        try:
+            data_frame = read_import_file(upload)
+            valid, error_message = validate_headers(data_frame, EMPLOYEE_IMPORT_HEADERS)
+            if not valid:
+                return Response({"error": error_message}, status=400)
+            return Response(import_employee_dataframe(data_frame), status=200)
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=400)
 
 
 class EmployeeBulkUpdateView(APIView):
