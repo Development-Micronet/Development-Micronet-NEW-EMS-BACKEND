@@ -123,6 +123,7 @@ class OffboardingSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         return {
+            "id": instance.id,
             "title": instance.title,
             "description": instance.description,
             "managers": [
@@ -375,6 +376,7 @@ class OffboardingEmployeeSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         return {
+            "id": instance.id,
             "employee": {
                 "id": instance.employee_id.id,
                 "name": instance.employee_id.get_full_name(),
@@ -463,6 +465,12 @@ class OffboardingStageSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         return {
             "id": instance.id,
+            "offboarding": {
+                "id": instance.offboarding_id.id,
+                "title": instance.offboarding_id.title,
+            }
+            if instance.offboarding_id
+            else None,
             "title": instance.title,
             "type": instance.get_type_display(),
             "managers": [
@@ -586,6 +594,7 @@ class ResignationRequestSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         return {
+            "id": instance.id,
             "employee": {
                 "id": instance.employee_id.id,
                 "name": instance.employee_id.get_full_name(),

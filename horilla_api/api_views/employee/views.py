@@ -356,7 +356,7 @@ class EmployeeTypeAPIView(APIView):
             )
 
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, ProgrammingError, connection, transaction
 
 from performance.models import Meeting, Objective
 
@@ -589,6 +589,30 @@ class EmployeeAPIView(APIView):
                     else:
                         _run_cleanup_step(lambda obj=related_obj: obj.delete())
 
+        def _delete_instance_with_missing_relation_fallback(instance):
+            """
+            Delete an instance normally, but if Django's collector crashes on a
+            stale relation whose table no longer exists, delete the base row
+            directly after the explicit cleanup has already been performed.
+            """
+            try:
+                with transaction.atomic():
+                    instance.delete()
+                return
+            except ProgrammingError as exc:
+                error_text = str(exc).lower()
+                if "relation" not in error_text or "does not exist" not in error_text:
+                    raise
+
+            table_name = connection.ops.quote_name(instance._meta.db_table)
+            pk_column = connection.ops.quote_name(instance._meta.pk.column)
+            with transaction.atomic():
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        f"DELETE FROM {table_name} WHERE {pk_column} = %s",
+                        [instance.pk],
+                    )
+
         try:
             employee = Employee.objects.get(pk=pk)
             force_delete = (
@@ -633,19 +657,17 @@ class EmployeeAPIView(APIView):
                     _cleanup_employee_reverse_relations(employee)
 
                     user = employee.employee_user_id
-                    employee.delete()
+                    _delete_instance_with_missing_relation_fallback(employee)
                     if user:
                         _cleanup_user_reverse_relations(user)
-                        with transaction.atomic():
-                            user.delete()
+                        _delete_instance_with_missing_relation_fallback(user)
                     return Response(status=status.HTTP_204_NO_CONTENT)
 
             user = employee.employee_user_id
-            employee.delete()
+            _delete_instance_with_missing_relation_fallback(employee)
             if user:
                 _cleanup_user_reverse_relations(user)
-                with transaction.atomic():
-                    user.delete()
+                _delete_instance_with_missing_relation_fallback(user)
             return Response(status=status.HTTP_204_NO_CONTENT)
 
         except ProtectedError as e:

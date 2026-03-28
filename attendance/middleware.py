@@ -1,5 +1,5 @@
 """
-Middleware to automatically trigger employee clock-out based on shift schedules
+Middleware to automatically trigger employee clock-out after the configured cutoff.
 """
 
 from datetime import datetime, timedelta
@@ -23,11 +23,13 @@ class AttendanceMiddleware(MiddlewareMixin):
         """
         Returns the configured global auto checkout time.
         """
-        configured_time = str(getattr(settings, "AUTO_CHECK_OUT_TIME", "18:45"))
-        try:
-            return datetime.strptime(configured_time, "%H:%M").time()
-        except ValueError:
-            return datetime.strptime("18:45", "%H:%M").time()
+        configured_time = str(getattr(settings, "AUTO_CHECK_OUT_TIME", "18:30"))
+        for fmt in ("%H:%M", "%H:%M:%S"):
+            try:
+                return datetime.strptime(configured_time, fmt).time()
+            except ValueError:
+                continue
+        return datetime.strptime("18:30", "%H:%M").time()
 
     def process_request(self, request):
         """
@@ -37,36 +39,30 @@ class AttendanceMiddleware(MiddlewareMixin):
 
     def trigger_function(self):
         """
-        Retrieves shift schedules with auto punch-out enabled and checks if there are
-        any attendance activities that haven't been clocked out. If the scheduled
-        auto punch-out time has passed, the function attempts to clock out the employee
-        automatically by invoking the `clock_out` function.
+        Checks open attendance records and clocks them out once the configured cutoff
+        time has passed for the attendance date.
         """
-        from attendance.models import Attendance, AttendanceActivity
+        from attendance.models import Attendance
         from attendance.views.clock_in_out import clock_out
+
         auto_checkout_time = self._get_auto_checkout_time()
         current_time = timezone.localtime(timezone.now())
-        activities = (
-            AttendanceActivity.objects.filter(clock_out_date=None, clock_out=None)
-            .select_related("employee_id")
-            .order_by("-created_at")
+        open_attendances = (
+            Attendance.objects.filter(
+                attendance_clock_in__isnull=False,
+                attendance_clock_out__isnull=True,
+            )
+            .select_related("employee_id", "employee_id__employee_user_id", "attendance_day")
+            .order_by("attendance_date", "id")
         )
 
-        for activity in activities:
-            attendance = (
-                Attendance.objects.filter(
-                    employee_id=activity.employee_id,
-                    attendance_date=activity.attendance_date,
-                    attendance_clock_out=None,
-                    attendance_clock_out_date=None,
-                )
-                .order_by("-id")
-                .first()
-            )
-            if not attendance:
+        for attendance in open_attendances:
+            employee = getattr(attendance, "employee_id", None)
+            user = getattr(employee, "employee_user_id", None)
+            if not employee or not user:
                 continue
 
-            auto_checkout_date = activity.attendance_date
+            auto_checkout_date = attendance.attendance_date
             if attendance.is_night_shift():
                 auto_checkout_date += timedelta(days=1)
 
@@ -80,7 +76,7 @@ class AttendanceMiddleware(MiddlewareMixin):
                 try:
                     clock_out(
                         Request(
-                            user=attendance.employee_id.employee_user_id,
+                            user=user,
                             date=auto_checkout_date,
                             time=auto_checkout_time,
                             datetime=combined_datetime,

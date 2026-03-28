@@ -302,6 +302,9 @@ class OffboardingStageAPIView(APIView):
         queryset = OffboardingStage.objects.all().order_by(
             "offboarding_id", "sequence", "id"
         )
+        offboarding_pk = request.query_params.get("offboarding")
+        if offboarding_pk:
+            queryset = queryset.filter(offboarding_id=offboarding_pk)
         serializer = OffboardingStageSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -390,6 +393,8 @@ class ResignationRequestAPIView(APIView):
             from_email = getattr(
                 email_backend, "dynamic_from_email_with_display_name", None
             )
+            if not from_email:
+                return
             subject = f"Resignation Request {action}"
             body = (
                 f"Employee: {instance.employee_id.get_full_name()}\n"

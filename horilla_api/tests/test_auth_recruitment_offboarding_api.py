@@ -53,7 +53,7 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
 
     def test_offboarding_stages_list_returns_stage_ids(self):
         self.client.force_authenticate(user=self.user)
-        Offboarding.objects.create(
+        offboarding = Offboarding.objects.create(
             title="Exit Process",
             description="Standard exit workflow",
             company_id=self.company,
@@ -65,8 +65,78 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         data = response.json()
         assert len(data) >= 1
         assert "id" in data[0]
+        assert "offboarding" in data[0]
+        assert data[0]["offboarding"]["id"] == offboarding.id
         assert "title" in data[0]
         assert "type" in data[0]
+
+    def test_exit_process_list_returns_exit_process_ids(self):
+        self.client.force_authenticate(user=self.user)
+        offboarding = Offboarding.objects.create(
+            title="Exit Process",
+            description="Standard exit workflow",
+            company_id=self.company,
+        )
+
+        response = self.client.get("/api/offboarding/exit-process/")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) >= 1
+        assert data[0]["id"] == offboarding.id
+        assert data[0]["title"] == "Exit Process"
+
+    def test_offboarding_stage_create_returns_connected_exit_process(self):
+        self.client.force_authenticate(user=self.user)
+        offboarding = Offboarding.objects.create(
+            title="Exit Process",
+            description="Standard exit workflow",
+            company_id=self.company,
+        )
+
+        response = self.client.post(
+            "/api/offboarding/stages/",
+            {
+                "offboarding": offboarding.id,
+                "title": "Exit Interview",
+                "type": "interview",
+                "managers": [self.employee.id],
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["offboarding"]["id"] == offboarding.id
+        assert data["offboarding"]["title"] == "Exit Process"
+        assert data["title"] == "Exit Interview"
+
+    def test_offboarding_stages_list_can_filter_by_exit_process(self):
+        self.client.force_authenticate(user=self.user)
+        first_offboarding = Offboarding.objects.create(
+            title="Exit Process One",
+            description="Standard exit workflow",
+            company_id=self.company,
+        )
+        second_offboarding = Offboarding.objects.create(
+            title="Exit Process Two",
+            description="Another exit workflow",
+            company_id=self.company,
+        )
+
+        response = self.client.get(
+            f"/api/offboarding/stages/?offboarding={second_offboarding.id}"
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) >= 1
+        assert all(
+            stage["offboarding"]["id"] == second_offboarding.id for stage in data
+        )
+        assert all(
+            stage["offboarding"]["id"] != first_offboarding.id for stage in data
+        )
 
     def test_resignation_request_create_returns_expected_shape(self):
         self.client.force_authenticate(user=self.user)
@@ -85,6 +155,7 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
 
         assert response.status_code == 201
         data = response.json()
+        assert "id" in data
         assert data["employee"]["id"] == self.employee.id
         assert data["title"] == "Personal Resignation"
         assert data["description"] == "I want to resign for personal reasons."
