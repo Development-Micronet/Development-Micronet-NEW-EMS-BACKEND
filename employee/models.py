@@ -5,17 +5,18 @@ This module is used to register models for employee app
 
 """
 
+import logging
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 
 from django.apps import apps
 from django.conf import settings
-from django.contrib.auth.models import Permission, User
+from django.contrib.auth.models import Group, Permission, User
 from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
 from django.db import models
 from django.db.models.query import QuerySet
-from django.db.models.signals import post_save
+from django.db.models.signals import m2m_changed, post_migrate, post_save
 from django.dispatch import receiver
 from django.templatetags.static import static
 from django.utils.translation import gettext as _
@@ -43,12 +44,59 @@ from horilla_audit.models import HorillaAuditInfo, HorillaAuditLog
 
 # create your model
 
+logger = logging.getLogger(__name__)
+
+ADMIN_USER_GROUP_NAME = "Admin User"
+EMPLOYEE_USER_GROUP_NAME = "Employee User"
+
 
 def reporting_manager_validator(value):
     """
     Method to implement reporting manager_validator
     """
     return value
+
+
+def ensure_default_user_groups():
+    """
+    Ensure the managed user groups exist in the auth tables/admin.
+    """
+    admin_group, _ = Group.objects.get_or_create(name=ADMIN_USER_GROUP_NAME)
+    employee_group, _ = Group.objects.get_or_create(name=EMPLOYEE_USER_GROUP_NAME)
+    return admin_group, employee_group
+
+
+def is_admin_user(user, employee=None):
+    """
+    Decide whether a user belongs to the managed admin group.
+    """
+    if user.is_superuser or user.is_staff:
+        return True
+    if employee is None:
+        employee = getattr(user, "employee_get", None)
+    return bool(employee and employee.role == "admin")
+
+
+def sync_user_role_group(user, employee=None):
+    """
+    Keep the managed role groups mutually exclusive for a user.
+    """
+    if not user or not getattr(user, "pk", None):
+        return
+    if getattr(user, "_syncing_role_groups", False):
+        return
+
+    admin_group, employee_group = ensure_default_user_groups()
+    user._syncing_role_groups = True
+    try:
+        if is_admin_user(user, employee=employee):
+            user.groups.add(admin_group)
+            user.groups.remove(employee_group)
+        else:
+            user.groups.add(employee_group)
+            user.groups.remove(admin_group)
+    finally:
+        user._syncing_role_groups = False
 
 
 class Employee(models.Model):
@@ -1005,6 +1053,7 @@ def set_superuser_role_to_admin(sender, instance, created, **kwargs):
         created (bool): Boolean indicating if this is a new instance.
         **kwargs: Additional keyword arguments passed by the signal.
     """
+    employee = getattr(instance, "employee_get", None)
     if instance.is_superuser:
         # Try to get or create the associated employee
         try:
@@ -1022,11 +1071,51 @@ def set_superuser_role_to_admin(sender, instance, created, **kwargs):
             if not created_emp and employee.role != "admin":
                 # Update directly to avoid signal recursion
                 Employee.objects.filter(pk=employee.pk).update(role="admin")
+                employee.role = "admin"
         except Exception as e:
             # Log the error but don't crash
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error setting admin role for superuser {instance.username}: {str(e)}")
+            logger.error(
+                "Error setting admin role for superuser %s: %s",
+                instance.username,
+                str(e),
+            )
+
+    sync_user_role_group(instance, employee=employee)
+
+
+@receiver(post_save, sender=Employee)
+def sync_employee_managed_group(sender, instance, **kwargs):
+    """
+    Keep the linked user's managed group aligned with the employee role.
+    """
+    sync_user_role_group(instance.employee_user_id, employee=instance)
+
+
+@receiver(m2m_changed, sender=User.groups.through)
+def enforce_managed_groups(sender, instance, action, reverse, pk_set, **kwargs):
+    """
+    Re-apply the managed role groups if they are changed manually.
+    """
+    if reverse or action not in {"post_add", "post_remove", "post_clear"}:
+        return
+
+    managed_group_ids = set(
+        Group.objects.filter(
+            name__in=[ADMIN_USER_GROUP_NAME, EMPLOYEE_USER_GROUP_NAME]
+        ).values_list("id", flat=True)
+    )
+    if action == "post_clear" or (pk_set and managed_group_ids.intersection(pk_set)):
+        sync_user_role_group(instance)
+
+
+@receiver(post_migrate)
+def ensure_managed_groups_exist(sender, **kwargs):
+    """
+    Create the managed groups so they are always visible in Django admin.
+    """
+    if getattr(sender, "label", None) != "employee":
+        return
+    ensure_default_user_groups()
 
 
 class Actiontype(HorillaModel):
