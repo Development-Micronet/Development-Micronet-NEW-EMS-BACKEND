@@ -6,7 +6,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from django.conf import settings
 from django.utils import timezone
 
-from attendance.methods.utils import Request
 from base.backends import logger
 
 
@@ -50,24 +49,27 @@ def create_work_record():
 
 
 def _parse_auto_checkout_time():
-    raw_value = getattr(settings, "AUTO_CHECK_OUT_TIME", "18:30")
+    raw_value = getattr(settings, "AUTO_CHECK_OUT_TIME", "18:25")
     for fmt in ("%H:%M", "%H:%M:%S"):
         try:
             return datetime.datetime.strptime(raw_value, fmt).time()
         except ValueError:
             continue
     logger.warning(
-        "Invalid AUTO_CHECK_OUT_TIME '%s'. Falling back to 18:30.", raw_value
+        "Invalid AUTO_CHECK_OUT_TIME '%s'. Falling back to 18:25.", raw_value
     )
-    return datetime.time(18, 30)
+    return datetime.time(18, 25)
 
 
 def auto_checkout_employees():
     from attendance.models import Attendance
-    from attendance.views.clock_in_out import clock_out
+    from attendance.views.clock_in_out import (
+        auto_checkout_attendance_if_due,
+        cleanup_stale_open_activities,
+    )
 
     now_local = timezone.localtime(timezone.now())
-    checkout_time = _parse_auto_checkout_time()
+    cleanup_stale_open_activities(current_datetime=now_local)
     open_attendances = (
         Attendance.objects.filter(
             attendance_clock_in__isnull=False,
@@ -83,25 +85,10 @@ def auto_checkout_employees():
         if not employee or not user:
             continue
 
-        auto_checkout_date = attendance.attendance_date
-        if attendance.is_night_shift():
-            auto_checkout_date += datetime.timedelta(days=1)
-
-        cutoff_datetime = timezone.make_aware(
-            datetime.datetime.combine(auto_checkout_date, checkout_time),
-            timezone.get_current_timezone(),
-        )
-        if now_local < cutoff_datetime:
-            continue
-
         try:
-            clock_out(
-                Request(
-                    user=user,
-                    date=auto_checkout_date,
-                    time=checkout_time,
-                    datetime=cutoff_datetime,
-                )
+            auto_checkout_attendance_if_due(
+                attendance=attendance,
+                current_datetime=now_local,
             )
         except Exception as exc:
             logger.exception(

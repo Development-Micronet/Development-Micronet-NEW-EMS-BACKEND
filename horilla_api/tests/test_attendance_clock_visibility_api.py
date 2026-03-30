@@ -1,7 +1,9 @@
+from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from django.db.models import Q
 from django.contrib.auth.models import Permission, User
+from django.db.models import Q
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -14,6 +16,19 @@ from horilla.horilla_middlewares import _thread_locals
 
 
 class AttendanceClockVisibilityAPITest(TestCase):
+    def _aware_datetime(self, hour, minute=0, current_date=None):
+        current_date = current_date or timezone.localdate()
+        return timezone.make_aware(
+            datetime(
+                current_date.year,
+                current_date.month,
+                current_date.day,
+                hour,
+                minute,
+            ),
+            timezone.get_current_timezone(),
+        )
+
     def setUp(self):
         if hasattr(_thread_locals, "request"):
             delattr(_thread_locals, "request")
@@ -40,7 +55,15 @@ class AttendanceClockVisibilityAPITest(TestCase):
             delattr(_thread_locals, "request")
 
     def test_work_record_stays_visible_in_db_and_api_after_check_in_and_check_out(self):
-        clock_in_response = self.client.post("/api/attendance/clock-in/", format="json")
+        attendance_date = timezone.localdate()
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(9, 15, attendance_date),
+        ):
+            clock_in_response = self.client.post(
+                "/api/attendance/clock-in/", format="json"
+            )
         assert clock_in_response.status_code == 200
 
         WorkRecords.company_filter = Q(employee_id__employee_work_info__company_id=999999)
@@ -117,7 +140,13 @@ class AttendanceClockVisibilityAPITest(TestCase):
         assert attendance_today_record["attendance_date"] == str(timezone.localdate())
         assert attendance_today_record["work_record_type"] == "FDP"
 
-        clock_out_response = self.client.post("/api/attendance/clock-out/", format="json")
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(18, 45, attendance_date),
+        ):
+            clock_out_response = self.client.post(
+                "/api/attendance/clock-out/", format="json"
+            )
         assert clock_out_response.status_code == 200
 
         after_check_out = self.client.get(
@@ -146,7 +175,6 @@ class AttendanceClockVisibilityAPITest(TestCase):
         attendance = Attendance.objects.get(
             employee_id=self.employee, attendance_date=timezone.localdate()
         )
-        assert attendance.attendance_validated is True
         assert attendance.attendance_clock_out is not None
 
         work_record = WorkRecords.objects.filter(
@@ -162,6 +190,110 @@ class AttendanceClockVisibilityAPITest(TestCase):
             delattr(WorkRecords, "company_filter")
         if hasattr(_thread_locals, "request"):
             delattr(_thread_locals, "request")
+
+    def test_late_clock_ins_stay_visible_in_non_validated_attendance_list(self):
+        attendance_date = timezone.localdate()
+        admin_user = User.objects.create_user(
+            username="attendance_admin", password="password"
+        )
+        admin_user.user_permissions.add(
+            Permission.objects.get(codename="view_attendance")
+        )
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Admin",
+            employee_last_name="Late",
+            email="admin.late@example.com",
+            phone="9999999997",
+        )
+
+        self.client.force_authenticate(user=self.user)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(11, 0, attendance_date),
+        ):
+            employee_clock_in = self.client.post(
+                "/api/attendance/clock-in/", format="json"
+            )
+        assert employee_clock_in.status_code == 200
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(19, 0, attendance_date),
+        ):
+            employee_clock_out = self.client.post(
+                "/api/attendance/clock-out/", format="json"
+            )
+        assert employee_clock_out.status_code == 200
+
+        employee_attendance = Attendance.objects.get(
+            employee_id=self.employee, attendance_date=attendance_date
+        )
+        assert employee_attendance.attendance_validated is False
+
+        employee_results_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "false",
+            },
+            format="json",
+        )
+        assert employee_results_response.status_code == 200
+        employee_result_ids = {
+            row["employee_id"] for row in employee_results_response.json()["results"]
+        }
+        assert self.employee.id in employee_result_ids
+
+        self.client.force_authenticate(user=admin_user)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(11, 15, attendance_date),
+        ):
+            admin_clock_in = self.client.post("/api/attendance/clock-in/", format="json")
+        assert admin_clock_in.status_code == 200
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(19, 15, attendance_date),
+        ):
+            admin_clock_out = self.client.post(
+                "/api/attendance/clock-out/", format="json"
+            )
+        assert admin_clock_out.status_code == 200
+
+        admin_attendance = Attendance.objects.get(
+            employee_id=admin_employee, attendance_date=attendance_date
+        )
+        assert admin_attendance.attendance_validated is False
+
+        validate_list_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "false",
+            },
+            format="json",
+        )
+        assert validate_list_response.status_code == 200
+        validate_result_ids = {
+            row["employee_id"] for row in validate_list_response.json()["results"]
+        }
+        assert self.employee.id in validate_result_ids
+        assert admin_employee.id in validate_result_ids
+
+        validated_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "true",
+            },
+            format="json",
+        )
+        assert validated_response.status_code == 200
+        validated_ids = {
+            row["employee_id"] for row in validated_response.json()["results"]
+        }
+        assert self.employee.id not in validated_ids
+        assert admin_employee.id not in validated_ids
 
     def test_permission_based_admin_can_see_accessible_work_records(self):
         admin_user = User.objects.create_user(

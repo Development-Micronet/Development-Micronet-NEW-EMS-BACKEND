@@ -38,12 +38,12 @@
                                     hx-include="#companyId{{att_setting.id}}" hx-on-htmx-after-request="setTimeout(() => { reloadMessage(); }, 200);"
                                     {% if request.session.selected_company == 'all'  %}
                                         {% if not att_setting.company_id %}
-                                            hx-swap="innerHTML"
+                                            hx-swap="outerHTML"
                                         {% else %}
                                             hx-swap="none"
                                         {% endif %}
                                     {% else %}
-                                        hx-swap="innerHTML"
+                                        hx-swap="outerHTML"
                                     {% endif %}
                                 {% endif %}
                             >

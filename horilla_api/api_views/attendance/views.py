@@ -305,6 +305,38 @@ def query_dict(data):
     return query_dict
 
 
+LATE_VALIDATION_THRESHOLD = datetime.strptime("10:30", "%H:%M").time()
+
+
+def _coerce_time_value(value):
+    if value is None:
+        return None
+    if hasattr(value, "hour") and hasattr(value, "minute"):
+        return value
+    for fmt in ("%H:%M:%S.%f", "%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(str(value), fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+def _should_auto_validate_attendance(attendance=None, activity=None):
+    """
+    Late check-ins should stay pending so they remain visible in validate views.
+    """
+    check_in_time = None
+    if activity is not None:
+        check_in_time = _coerce_time_value(getattr(activity, "clock_in", None))
+    if check_in_time is None and attendance is not None:
+        check_in_time = _coerce_time_value(
+            getattr(attendance, "attendance_clock_in", None)
+        )
+    if check_in_time and check_in_time > LATE_VALIDATION_THRESHOLD:
+        return False
+    return True
+
+
 class ClockInAPIView(APIView):
     """
     Allows authenticated employees to clock in, determining the correct shift and attendance date, including handling night shifts.
@@ -431,16 +463,21 @@ class ClockInAPIView(APIView):
                 attendance.attendance_clock_in_date = resumed_clock_in_date
                 attendance.attendance_clock_in = resumed_clock_in
             attendance.is_active = True
-            attendance.attendance_validated = True
 
             # Manually sync the late come flag from activity to parent if needed
             attendance.is_late_come = activity.is_late_come
+            attendance.attendance_validated = _should_auto_validate_attendance(
+                attendance=attendance, activity=activity
+            )
             attendance.save()
             sync_work_record_from_attendance(attendance)
 
             # Only update the flag if it hasn't been marked Late yet
             if activity.is_late_come:
                 attendance.is_late_come = True
+            attendance.attendance_validated = _should_auto_validate_attendance(
+                attendance=attendance, activity=activity
+            )
             attendance.save()
             sync_work_record_from_attendance(attendance)
             # 4. Return the new fields in the response
@@ -527,7 +564,9 @@ class ClockOutAPIView(APIView):
         attendance.attendance_clock_out = now_time
         attendance.attendance_clock_out_date = current_date
         attendance.is_active = False
-        attendance.attendance_validated = True
+        attendance.attendance_validated = _should_auto_validate_attendance(
+            attendance=attendance, activity=activity_instance
+        )
 
         # Optional: Sync the early out flag to the main Attendance record
         attendance.is_early_out = activity_instance.is_early_out
@@ -541,6 +580,9 @@ class ClockOutAPIView(APIView):
             # If this isn't an early out anymore (because of a newer punch),
             # we might need to reset it.
             attendance.is_early_out = False
+        attendance.attendance_validated = _should_auto_validate_attendance(
+            attendance=attendance, activity=activity_instance
+        )
         attendance.save()
         sync_work_record_from_attendance(attendance)
         return Response(

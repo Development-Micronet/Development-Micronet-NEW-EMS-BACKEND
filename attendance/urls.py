@@ -144,6 +144,11 @@ urlpatterns = [
     path("clock-in", attendance.views.clock_in_out.clock_in, name="clock-in"),
     path("clock-out", attendance.views.clock_in_out.clock_out, name="clock-out"),
     path(
+        "in-out-component",
+        attendance.views.clock_in_out.in_out_component,
+        name="in-out-component",
+    ),
+    path(
         "on-time-view/",
         views.on_time_view,
         name="on-time-view",

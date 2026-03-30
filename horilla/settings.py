@@ -361,7 +361,7 @@ BREVO_FROM_EMAIL = env("BREVO_FROM_EMAIL", default="noreply@horilla.com")
 BREVO_FROM_NAME = env("BREVO_FROM_NAME", default="HR Management")
 FRONTEND_RESET_PASSWORD_URL = env("Frontend_url", default="http://192.168.1.192:5173/reset-password/:uid/:token")
 PASSWORD_RESET_TIMEOUT = env.int("PASSWORD_RESET_TIMEOUT", default=300)
-AUTO_CHECK_OUT_TIME = env("AUTO_CHECK_OUT_TIME", default="18:30")
+AUTO_CHECK_OUT_TIME = env("AUTO_CHECK_OUT_TIME", default="18:25")
 
 # Alternative backends available:
 # EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'  # Print to console

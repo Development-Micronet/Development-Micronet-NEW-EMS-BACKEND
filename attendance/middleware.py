@@ -8,8 +8,6 @@ from django.conf import settings
 from django.utils import timezone
 from django.utils.deprecation import MiddlewareMixin
 
-from attendance.methods.utils import Request
-
 
 class AttendanceMiddleware(MiddlewareMixin):
     """
@@ -23,13 +21,13 @@ class AttendanceMiddleware(MiddlewareMixin):
         """
         Returns the configured global auto checkout time.
         """
-        configured_time = str(getattr(settings, "AUTO_CHECK_OUT_TIME", "18:30"))
+        configured_time = str(getattr(settings, "AUTO_CHECK_OUT_TIME", "18:25"))
         for fmt in ("%H:%M", "%H:%M:%S"):
             try:
                 return datetime.strptime(configured_time, fmt).time()
             except ValueError:
                 continue
-        return datetime.strptime("18:30", "%H:%M").time()
+        return datetime.strptime("18:25", "%H:%M").time()
 
     def process_request(self, request):
         """
@@ -43,10 +41,13 @@ class AttendanceMiddleware(MiddlewareMixin):
         time has passed for the attendance date.
         """
         from attendance.models import Attendance
-        from attendance.views.clock_in_out import clock_out
+        from attendance.views.clock_in_out import (
+            auto_checkout_attendance_if_due,
+            cleanup_stale_open_activities,
+        )
 
-        auto_checkout_time = self._get_auto_checkout_time()
         current_time = timezone.localtime(timezone.now())
+        cleanup_stale_open_activities(current_datetime=current_time)
         open_attendances = (
             Attendance.objects.filter(
                 attendance_clock_in__isnull=False,
@@ -62,25 +63,10 @@ class AttendanceMiddleware(MiddlewareMixin):
             if not employee or not user:
                 continue
 
-            auto_checkout_date = attendance.attendance_date
-            if attendance.is_night_shift():
-                auto_checkout_date += timedelta(days=1)
-
-            combined_datetime = timezone.make_aware(
-                datetime.combine(auto_checkout_date, auto_checkout_time),
-                timezone.get_current_timezone(),
-            )
-
-            # Auto check-out applies once the configured cutoff time is reached.
-            if current_time >= combined_datetime:
-                try:
-                    clock_out(
-                        Request(
-                            user=user,
-                            date=auto_checkout_date,
-                            time=auto_checkout_time,
-                            datetime=combined_datetime,
-                        )
-                    )
-                except Exception:
-                    continue
+            try:
+                auto_checkout_attendance_if_due(
+                    attendance=attendance,
+                    current_datetime=current_time,
+                )
+            except Exception:
+                continue
