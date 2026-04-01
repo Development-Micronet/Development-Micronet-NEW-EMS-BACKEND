@@ -272,18 +272,18 @@ def clock_in(request):
                 return HttpResponse(_("You cannot mark attendance from this network"))
 
         employee, work_info = employee_exists(request)
-        datetime_now = datetime.now()
+        datetime_now = timezone.localtime(timezone.now())
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime
         if employee and work_info is not None:
             shift = work_info.shift_id
-            date_today = date.today()
+            date_today = datetime_now.date()
             if request.__dict__.get("date"):
                 date_today = request.date
             attendance_date = date_today
             day = date_today.strftime("%A").lower()
             day = EmployeeShiftDay.objects.get(day=day)
-            now = datetime.now().strftime("%H:%M")
+            now = datetime_now.strftime("%H:%M")
             if request.__dict__.get("time"):
                 now = request.time.strftime("%H:%M")
             now_sec = strtime_seconds(now)
@@ -353,8 +353,9 @@ def clock_out_attendance_and_activity(
         return
 
     if out_datetime is None:
-        out_datetime = datetime.combine(
-            date_today, datetime.strptime(now, "%H:%M").time()
+        out_datetime = timezone.make_aware(
+            datetime.combine(date_today, datetime.strptime(now, "%H:%M").time()),
+            timezone.get_current_timezone(),
         )
 
     open_activities = AttendanceActivity.objects.filter(
@@ -363,11 +364,41 @@ def clock_out_attendance_and_activity(
         clock_out__isnull=True,
     ).order_by("clock_in_date", "clock_in", "id")
 
-    for attendance_activity in open_activities:
-        attendance_activity.clock_out = out_datetime.time()
-        attendance_activity.clock_out_date = date_today
-        attendance_activity.out_datetime = out_datetime
-        attendance_activity.save()
+    if open_activities.exists():
+        for attendance_activity in open_activities:
+            attendance_activity.clock_out = out_datetime.time()
+            attendance_activity.clock_out_date = out_datetime.date()
+            attendance_activity.out_datetime = out_datetime
+            attendance_activity.save()
+    else:
+        latest_activity = (
+            AttendanceActivity.objects.filter(
+                employee_id=employee,
+                attendance_date=attendance.attendance_date,
+                clock_out__isnull=False,
+                clock_out_date__isnull=False,
+            )
+            .order_by("-clock_out_date", "-clock_out", "-id")
+            .first()
+        )
+        if latest_activity:
+            latest_out_datetime = latest_activity.out_datetime
+            if latest_out_datetime is None:
+                latest_out_datetime = datetime.combine(
+                    latest_activity.clock_out_date, latest_activity.clock_out
+                )
+            if timezone.is_naive(latest_out_datetime):
+                latest_out_datetime = timezone.make_aware(
+                    latest_out_datetime, timezone.get_current_timezone()
+                )
+
+            if out_datetime > latest_out_datetime:
+                latest_activity.clock_out = out_datetime.time()
+                latest_activity.clock_out_date = out_datetime.date()
+                latest_activity.out_datetime = out_datetime
+                latest_activity.save(
+                    update_fields=["clock_out", "clock_out_date", "out_datetime"]
+                )
 
     attendance_activities = AttendanceActivity.objects.filter(
         employee_id=employee,
@@ -376,17 +407,10 @@ def clock_out_attendance_and_activity(
         clock_out_date__isnull=False,
     ).order_by("attendance_date", "id")
 
-    duration = 0
-    for activity in attendance_activities:
-        in_datetime, activity_out_datetime = activity_datetime(activity)
-        difference = activity_out_datetime - in_datetime
-        days_second = difference.days * 24 * 3600
-        seconds = difference.seconds
-        total_seconds = days_second + seconds
-        duration = duration + total_seconds
+    duration = sum(activity.duration() for activity in attendance_activities)
 
     attendance.attendance_clock_out = out_datetime.time()
-    attendance.attendance_clock_out_date = date_today
+    attendance.attendance_clock_out_date = out_datetime.date()
     attendance.attendance_worked_hour = format_time(duration)
     attendance.attendance_overtime = overtime_calculation(attendance)
 
@@ -403,13 +427,13 @@ def get_auto_checkout_time():
     """
     Return the configured automatic check-out cutoff time.
     """
-    configured_time = str(getattr(settings, "AUTO_CHECK_OUT_TIME", "18:25"))
+    configured_time = str(getattr(settings, "AUTO_CHECK_OUT_TIME", "18:30"))
     for fmt in ("%H:%M", "%H:%M:%S"):
         try:
             return datetime.strptime(configured_time, fmt).time()
         except ValueError:
             continue
-    return datetime.strptime("18:25", "%H:%M").time()
+    return datetime.strptime("18:30", "%H:%M").time()
 
 
 def _resolve_activity_start_datetime(activity, fallback_datetime):
@@ -718,15 +742,15 @@ def clock_out(request):
         and attendance_general_settings.enable_check_in
         or request.__dict__.get("datetime")
     ):
-        datetime_now = datetime.now()
+        datetime_now = timezone.localtime(timezone.now())
         if request.__dict__.get("datetime"):
             datetime_now = request.datetime
         employee, work_info = employee_exists(request)
         shift = work_info.shift_id
-        date_today = date.today()
+        date_today = datetime_now.date()
         if request.__dict__.get("date"):
             date_today = request.date
-        now = datetime.now().strftime("%H:%M")
+        now = datetime_now.strftime("%H:%M")
         if request.__dict__.get("time"):
             now = request.time.strftime("%H:%M")
         perform_clock_out(

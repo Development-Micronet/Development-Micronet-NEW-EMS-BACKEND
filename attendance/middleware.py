@@ -21,13 +21,13 @@ class AttendanceMiddleware(MiddlewareMixin):
         """
         Returns the configured global auto checkout time.
         """
-        configured_time = str(getattr(settings, "AUTO_CHECK_OUT_TIME", "18:25"))
+        configured_time = str(getattr(settings, "AUTO_CHECK_OUT_TIME", "18:30"))
         for fmt in ("%H:%M", "%H:%M:%S"):
             try:
                 return datetime.strptime(configured_time, fmt).time()
             except ValueError:
                 continue
-        return datetime.strptime("18:25", "%H:%M").time()
+        return datetime.strptime("18:30", "%H:%M").time()
 
     def process_request(self, request):
         """

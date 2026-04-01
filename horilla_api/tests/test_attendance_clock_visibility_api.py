@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,7 +8,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from attendance.models import Attendance, WorkRecords
+from attendance.models import Attendance, AttendanceActivity, WorkRecords
 from attendance.signals import sync_work_record_from_attendance
 from base.models import EmployeeShiftDay
 from employee.models import Employee
@@ -344,3 +344,175 @@ class AttendanceClockVisibilityAPITest(TestCase):
             and row["status"] == "present"
             for row in response.json()
         )
+
+    def test_negative_utc_local_activity_does_not_return_negative_at_work(self):
+        attendance_date = timezone.localdate()
+        attendance = Attendance.objects.create(
+            employee_id=self.employee,
+            attendance_date=attendance_date,
+            attendance_clock_in_date=attendance_date,
+            attendance_clock_in=datetime.strptime("12:30", "%H:%M").time(),
+            attendance_validated=False,
+            minimum_hour="00:00",
+        )
+
+        utc_instant = datetime(
+            attendance_date.year,
+            attendance_date.month,
+            attendance_date.day,
+            7,
+            0,
+            tzinfo=dt_timezone.utc,
+        )
+        AttendanceActivity.objects.create(
+            employee_id=self.employee,
+            attendance_date=attendance_date,
+            clock_in_date=attendance_date,
+            clock_in=datetime.strptime("12:30", "%H:%M").time(),
+            in_datetime=utc_instant,
+            clock_out_date=attendance_date,
+            clock_out=datetime.strptime("07:00", "%H:%M").time(),
+            out_datetime=utc_instant,
+        )
+
+        attendance.save()
+        attendance.refresh_from_db()
+
+        assert attendance.attendance_worked_hour == "00:00:00"
+
+        response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "false",
+            },
+            format="json",
+        )
+        assert response.status_code == 200
+        result = next(
+            (
+                row
+                for row in response.json()["results"]
+                if row["employee_id"] == self.employee.id
+                and row["date"] == str(attendance_date)
+            ),
+            None,
+        )
+        assert result is not None
+        assert result["at_work"] == "00:00:00"
+
+    def test_non_validated_attendance_api_repairs_at_work_for_employee_and_admin(self):
+        attendance_date = timezone.localdate()
+        admin_user = User.objects.create_user(
+            username="attendance_admin_repair", password="password"
+        )
+        admin_user.user_permissions.add(
+            Permission.objects.get(codename="view_attendance")
+        )
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Admin",
+            employee_last_name="Repair",
+            email="admin.repair@example.com",
+            phone="9999999995",
+        )
+
+        self.client.force_authenticate(user=self.user)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(11, 0, attendance_date),
+        ):
+            employee_clock_in = self.client.post(
+                "/api/attendance/clock-in/", format="json"
+            )
+        assert employee_clock_in.status_code == 200
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(19, 0, attendance_date),
+        ):
+            employee_clock_out = self.client.post(
+                "/api/attendance/clock-out/", format="json"
+            )
+        assert employee_clock_out.status_code == 200
+
+        self.client.force_authenticate(user=admin_user)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(11, 15, attendance_date),
+        ):
+            admin_clock_in = self.client.post("/api/attendance/clock-in/", format="json")
+        assert admin_clock_in.status_code == 200
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(19, 15, attendance_date),
+        ):
+            admin_clock_out = self.client.post(
+                "/api/attendance/clock-out/", format="json"
+            )
+        assert admin_clock_out.status_code == 200
+
+        employee_attendance = Attendance.objects.get(
+            employee_id=self.employee, attendance_date=attendance_date
+        )
+        admin_attendance = Attendance.objects.get(
+            employee_id=admin_employee, attendance_date=attendance_date
+        )
+
+        Attendance.objects.filter(pk=employee_attendance.pk).update(
+            attendance_worked_hour="-143:00:00",
+            at_work_second=-514800,
+            attendance_overtime="00:00",
+            overtime_second=0,
+        )
+        Attendance.objects.filter(pk=admin_attendance.pk).update(
+            attendance_worked_hour="-143:00:00",
+            at_work_second=-514800,
+            attendance_overtime="00:00",
+            overtime_second=0,
+        )
+
+        self.client.force_authenticate(user=self.user)
+        employee_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "false",
+            },
+            format="json",
+        )
+        assert employee_response.status_code == 200
+        employee_result = next(
+            (
+                row
+                for row in employee_response.json()["results"]
+                if row["employee_id"] == self.employee.id
+            ),
+            None,
+        )
+        assert employee_result is not None
+        assert employee_result["at_work"] == "08:00:00"
+
+        employee_attendance.refresh_from_db()
+        assert employee_attendance.attendance_worked_hour == "08:00:00"
+        assert employee_attendance.at_work_second == 28800
+
+        self.client.force_authenticate(user=admin_user)
+        admin_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "false",
+            },
+            format="json",
+        )
+        assert admin_response.status_code == 200
+        admin_results = {
+            row["employee_id"]: row["at_work"]
+            for row in admin_response.json()["results"]
+        }
+        assert admin_results[self.employee.id] == "08:00:00"
+        assert admin_results[admin_employee.id] == "08:00:00"
+
+        admin_attendance.refresh_from_db()
+        assert admin_attendance.attendance_worked_hour == "08:00:00"
+        assert admin_attendance.at_work_second == 28800

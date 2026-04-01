@@ -6,7 +6,6 @@ This module is used to register models for recruitment app
 """
 
 import contextlib
-import datetime as dt
 import json
 from datetime import date, datetime, timedelta
 
@@ -87,17 +86,34 @@ class AttendanceActivity(HorillaModel):
         """
         Duration calc b/w in-out method
         """
+        current_datetime = timezone.localtime(timezone.now())
+        clock_in_datetime = self.in_datetime
+        clock_out_datetime = self.out_datetime
 
-        if not self.clock_out or not self.clock_out_date:
-            self.clock_out_date = datetime.today().date()
-            self.clock_out = datetime.now().time()
+        if clock_in_datetime is None and self.clock_in and self.clock_in_date:
+            clock_in_datetime = datetime.combine(self.clock_in_date, self.clock_in)
+        if clock_out_datetime is None:
+            if self.clock_out and self.clock_out_date:
+                clock_out_datetime = datetime.combine(
+                    self.clock_out_date, self.clock_out
+                )
+            else:
+                clock_out_datetime = current_datetime
 
-        clock_in_datetime = datetime.combine(self.clock_in_date, self.clock_in)
-        clock_out_datetime = datetime.combine(self.clock_out_date, self.clock_out)
+        if timezone.is_naive(clock_in_datetime):
+            clock_in_datetime = timezone.make_aware(
+                clock_in_datetime, timezone.get_current_timezone()
+            )
+        if timezone.is_naive(clock_out_datetime):
+            clock_out_datetime = timezone.make_aware(
+                clock_out_datetime, timezone.get_current_timezone()
+            )
 
-        time_difference = clock_out_datetime - clock_in_datetime
+        time_difference = timezone.localtime(clock_out_datetime) - timezone.localtime(
+            clock_in_datetime
+        )
 
-        return time_difference.total_seconds()
+        return max(0, int(time_difference.total_seconds()))
 
     def __str__(self):
         return f"{self.employee_id} - {self.attendance_date} - {self.clock_in} - {self.clock_out}"
@@ -378,19 +394,35 @@ class Attendance(HorillaModel):
             attendance_date=self.attendance_date, employee_id=self.employee_id
         ).order_by("clock_in")
         at_work_seconds = 0
-        now = datetime.now()
+        current_datetime = timezone.localtime(timezone.now())
         for activity in activities:
-            out_time = activity.clock_out
-            if out_time is None:
-                combined_out = datetime.combine(
-                    now, dt.time(hour=now.hour, minute=now.minute, second=now.second)
+            combined_in = activity.in_datetime
+            if combined_in is None and activity.clock_in and activity.clock_in_date:
+                combined_in = datetime.combine(activity.clock_in_date, activity.clock_in)
+
+            combined_out = activity.out_datetime
+            if combined_out is None:
+                if activity.clock_out and activity.clock_out_date:
+                    combined_out = datetime.combine(
+                        activity.clock_out_date, activity.clock_out
+                    )
+                else:
+                    combined_out = current_datetime
+
+            if combined_in is None or combined_out is None:
+                continue
+
+            if timezone.is_naive(combined_in):
+                combined_in = timezone.make_aware(
+                    combined_in, timezone.get_current_timezone()
                 )
-            else:
-                combined_out = datetime.combine(activity.clock_out_date, out_time)
-            in_time = activity.clock_in
-            combined_in = datetime.combine(activity.clock_in_date, in_time)
-            diffs = combined_out - combined_in
-            at_work_seconds = at_work_seconds + diffs.total_seconds()
+            if timezone.is_naive(combined_out):
+                combined_out = timezone.make_aware(
+                    combined_out, timezone.get_current_timezone()
+                )
+
+            diffs = timezone.localtime(combined_out) - timezone.localtime(combined_in)
+            at_work_seconds += max(0, int(diffs.total_seconds()))
         return at_work_seconds
 
     def hours_pending(self):

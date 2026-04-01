@@ -9,10 +9,13 @@ from attendance.middleware import AttendanceMiddleware
 from attendance.models import Attendance, AttendanceActivity
 from base.models import EmployeeShiftDay
 from employee.models import Employee
+from horilla.horilla_middlewares import _thread_locals
 
 
 class AttendanceAutoCheckoutMiddlewareTest(TestCase):
     def setUp(self):
+        if hasattr(_thread_locals, "request"):
+            delattr(_thread_locals, "request")
         EmployeeShiftDay.objects.get_or_create(day="wednesday")
         self.user = User.objects.create_user(
             username="auto_checkout_tester",
@@ -35,11 +38,15 @@ class AttendanceAutoCheckoutMiddlewareTest(TestCase):
             minimum_hour="00:00",
         )
 
-    @override_settings(AUTO_CHECK_OUT_TIME="18:25:00")
+    def tearDown(self):
+        if hasattr(_thread_locals, "request"):
+            delattr(_thread_locals, "request")
+
+    @override_settings(AUTO_CHECK_OUT_TIME="18:30:00")
     @patch("attendance.views.clock_in_out.perform_clock_out")
-    def test_auto_checkout_runs_at_and_after_625_pm(self, mock_perform_clock_out):
+    def test_auto_checkout_runs_at_and_after_630_pm(self, mock_perform_clock_out):
         current_time = timezone.make_aware(
-            datetime(2026, 3, 25, 18, 25),
+            datetime(2026, 3, 25, 18, 30),
             timezone.get_current_timezone(),
         )
 
@@ -49,16 +56,16 @@ class AttendanceAutoCheckoutMiddlewareTest(TestCase):
         mock_perform_clock_out.assert_called_once_with(
             employee=self.employee,
             date_today=self.attendance_date,
-            now="18:25",
+            now="18:30",
             out_datetime=current_time,
             attendance=self.attendance,
         )
 
-    @override_settings(AUTO_CHECK_OUT_TIME="18:25")
+    @override_settings(AUTO_CHECK_OUT_TIME="18:30")
     @patch("attendance.views.clock_in_out.perform_clock_out")
-    def test_auto_checkout_skips_before_625_pm(self, mock_perform_clock_out):
+    def test_auto_checkout_skips_before_630_pm(self, mock_perform_clock_out):
         current_time = timezone.make_aware(
-            datetime(2026, 3, 25, 18, 24),
+            datetime(2026, 3, 25, 18, 29),
             timezone.get_current_timezone(),
         )
 
@@ -67,9 +74,9 @@ class AttendanceAutoCheckoutMiddlewareTest(TestCase):
 
         mock_perform_clock_out.assert_not_called()
 
-    @override_settings(AUTO_CHECK_OUT_TIME="18:25")
+    @override_settings(AUTO_CHECK_OUT_TIME="18:30")
     @patch("attendance.views.clock_in_out.perform_clock_out")
-    def test_in_out_component_refresh_triggers_auto_checkout_at_625_pm(
+    def test_in_out_component_refresh_triggers_auto_checkout_at_630_pm(
         self, mock_perform_clock_out
     ):
         session = self.client.session
@@ -78,7 +85,7 @@ class AttendanceAutoCheckoutMiddlewareTest(TestCase):
         self.client.force_login(self.user)
 
         current_time = timezone.make_aware(
-            datetime(2026, 3, 25, 18, 25),
+            datetime(2026, 3, 25, 18, 30),
             timezone.get_current_timezone(),
         )
 
@@ -93,7 +100,7 @@ class AttendanceAutoCheckoutMiddlewareTest(TestCase):
         mock_perform_clock_out.assert_any_call(
             employee=self.employee,
             date_today=self.attendance_date,
-            now="18:25",
+            now="18:30",
             out_datetime=current_time,
             attendance=self.attendance,
         )
@@ -129,3 +136,35 @@ class AttendanceAutoCheckoutMiddlewareTest(TestCase):
         orphan_activity.refresh_from_db()
         self.assertIsNotNone(orphan_activity.clock_out)
         self.assertEqual(orphan_activity.clock_out_date, self.attendance_date)
+
+    @override_settings(AUTO_CHECK_OUT_TIME="18:30")
+    def test_auto_checkout_stores_830_worked_hours_for_10am_check_in(self):
+        self.attendance.attendance_clock_in = time(10, 0)
+        self.attendance.attendance_clock_in_date = self.attendance_date
+        self.attendance.save(
+            update_fields=["attendance_clock_in", "attendance_clock_in_date"]
+        )
+
+        AttendanceActivity.objects.create(
+            employee_id=self.employee,
+            attendance_date=self.attendance_date,
+            clock_in_date=self.attendance_date,
+            clock_in=time(10, 0),
+            in_datetime=timezone.make_aware(
+                datetime(2026, 3, 25, 10, 0),
+                timezone.get_current_timezone(),
+            ),
+        )
+
+        current_time = timezone.make_aware(
+            datetime(2026, 3, 25, 18, 30),
+            timezone.get_current_timezone(),
+        )
+
+        with patch("attendance.middleware.timezone.now", return_value=current_time):
+            AttendanceMiddleware(lambda request: None).trigger_function()
+
+        self.attendance.refresh_from_db()
+        self.assertEqual(self.attendance.attendance_clock_out, time(18, 30))
+        self.assertEqual(self.attendance.attendance_worked_hour, "08:30:00")
+        self.assertEqual(self.attendance.at_work_second, 30600)

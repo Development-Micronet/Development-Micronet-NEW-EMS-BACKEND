@@ -185,7 +185,7 @@ class ValidateAttendanceByEmployeeView(APIView):
 
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from django import template
 from django.conf import settings
@@ -248,6 +248,7 @@ class OnBreakEmployeesAPIView(APIView):
 
 
 from attendance.models import Attendance, AttendanceActivity, EmployeeShiftDay
+from attendance.methods.utils import format_time, strtime_seconds
 from attendance.views.clock_in_out import *
 from attendance.signals import (
     sync_work_record_from_attendance,
@@ -541,16 +542,50 @@ class ClockOutAPIView(APIView):
             open_activity.save()  # This triggers the is_early_out logic in model
             activity_instance = open_activity
         else:
-            activity_instance = AttendanceActivity.objects.create(
-                employee_id=employee,
-                attendance_date=current_date,
-                clock_in_date=current_date,
-                clock_in=now_time,
-                in_datetime=current_datetime,
-                clock_out_date=current_date,
-                clock_out=now_time,
-                out_datetime=current_datetime,
-            )  # This triggers the is_early_out logic in model
+            latest_activity = (
+                AttendanceActivity.objects.filter(
+                    employee_id=employee,
+                    attendance_date=current_date,
+                    clock_out__isnull=False,
+                    clock_out_date__isnull=False,
+                )
+                .order_by("-clock_out_date", "-clock_out", "-id")
+                .first()
+            )
+            if latest_activity:
+                latest_out_datetime = latest_activity.out_datetime
+                if latest_out_datetime is None:
+                    latest_out_datetime = django_timezone.make_aware(
+                        datetime.combine(
+                            latest_activity.clock_out_date, latest_activity.clock_out
+                        ),
+                        django_timezone.get_current_timezone(),
+                    )
+                elif django_timezone.is_naive(latest_out_datetime):
+                    latest_out_datetime = django_timezone.make_aware(
+                        latest_out_datetime, django_timezone.get_current_timezone()
+                    )
+
+                if current_datetime > latest_out_datetime:
+                    latest_activity.clock_out = now_time
+                    latest_activity.clock_out_date = current_date
+                    latest_activity.out_datetime = current_datetime
+                    latest_activity.save(
+                        update_fields=["clock_out", "clock_out_date", "out_datetime"]
+                    )
+                    activity_instance = latest_activity
+
+            if activity_instance is None:
+                activity_instance = AttendanceActivity.objects.create(
+                    employee_id=employee,
+                    attendance_date=current_date,
+                    clock_in_date=current_date,
+                    clock_in=now_time,
+                    in_datetime=current_datetime,
+                    clock_out_date=current_date,
+                    clock_out=now_time,
+                    out_datetime=current_datetime,
+                )  # This triggers the is_early_out logic in model
 
         # Update or create Attendance record
         attendance, _ = Attendance.objects.get_or_create(
@@ -730,6 +765,48 @@ class AttendanceView(APIView):
         except Exception:
             return None
 
+    def _stored_duration_is_invalid(self, att):
+        worked_hour = getattr(att, "attendance_worked_hour", None)
+        at_work_second = getattr(att, "at_work_second", None)
+        if worked_hour is None:
+            return True
+        if str(worked_hour).startswith("-"):
+            return True
+        if at_work_second is not None and at_work_second < 0:
+            return True
+        return False
+
+    def _attendance_metrics(self, att):
+        minimum_seconds = strtime_seconds(att.minimum_hour or "00:00")
+        worked_seconds = max(0, int(att.get_at_work_from_activities() or 0))
+        worked_hour = format_time(worked_seconds)
+        pending_seconds = max(0, minimum_seconds - worked_seconds)
+        pending_hour = format_time(pending_seconds)
+        overtime_seconds = max(0, worked_seconds - minimum_seconds)
+        overtime = format_time(overtime_seconds)
+
+        should_store = bool(att.attendance_clock_out) or self._stored_duration_is_invalid(
+            att
+        )
+        if should_store:
+            updates = {}
+            if att.attendance_worked_hour != worked_hour:
+                updates["attendance_worked_hour"] = worked_hour
+                att.attendance_worked_hour = worked_hour
+            if att.at_work_second != worked_seconds:
+                updates["at_work_second"] = worked_seconds
+                att.at_work_second = worked_seconds
+            if att.attendance_overtime != overtime:
+                updates["attendance_overtime"] = overtime
+                att.attendance_overtime = overtime
+            if att.overtime_second != overtime_seconds:
+                updates["overtime_second"] = overtime_seconds
+                att.overtime_second = overtime_seconds
+            if updates:
+                Attendance.objects.filter(pk=att.pk).update(**updates)
+
+        return worked_hour, pending_hour, overtime
+
     def _attendance_response(self, att):
         emp = att.employee_id
         work_info = getattr(emp, "employee_work_info", None)
@@ -756,6 +833,7 @@ class AttendanceView(APIView):
         check_out = self._as_time(att.attendance_clock_out)
         is_late = check_in is not None and check_in > self.LATE_COME_THRESHOLD
         is_early = check_out is not None and check_out < self.EARLY_OUT_THRESHOLD
+        at_work, pending_hour, overtime = self._attendance_metrics(att)
         if att.attendance_clock_in:
             status = "present"
             status_display = "Currently working"
@@ -818,11 +896,9 @@ class AttendanceView(APIView):
             "shift": shift,
             "work_type": work_type,
             "min_hour": att.minimum_hour,
-            "at_work": att.attendance_worked_hour,
-            "pending_hour": (
-                att.hours_pending() if hasattr(att, "hours_pending") else None
-            ),
-            "overtime": att.attendance_overtime,
+            "at_work": at_work,
+            "pending_hour": pending_hour,
+            "overtime": overtime,
             "attendance_validated": att.attendance_validated,
             "status": status,
             "status_display": status_display,

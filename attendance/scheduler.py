@@ -49,16 +49,16 @@ def create_work_record():
 
 
 def _parse_auto_checkout_time():
-    raw_value = getattr(settings, "AUTO_CHECK_OUT_TIME", "18:25")
+    raw_value = getattr(settings, "AUTO_CHECK_OUT_TIME", "18:30")
     for fmt in ("%H:%M", "%H:%M:%S"):
         try:
             return datetime.datetime.strptime(raw_value, fmt).time()
         except ValueError:
             continue
     logger.warning(
-        "Invalid AUTO_CHECK_OUT_TIME '%s'. Falling back to 18:25.", raw_value
+        "Invalid AUTO_CHECK_OUT_TIME '%s'. Falling back to 18:30.", raw_value
     )
-    return datetime.time(18, 25)
+    return datetime.time(18, 30)
 
 
 def auto_checkout_employees():
