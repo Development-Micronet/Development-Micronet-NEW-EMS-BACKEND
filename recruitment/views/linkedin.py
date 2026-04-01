@@ -61,19 +61,44 @@ def delete_linkedin_account(request, pk, return_redirect=True):
 
 @login_required
 def check_linkedin(request):
-    import requests
-
     url = "https://www.linkedin.com/oauth/v2/userinfo"
     data = {
         "grant_type": "authorization_code",
-        "code": "REDACTED_LINKEDIN_AUTH_CODE",
-        "redirect_uri": "REDACTED_LINKEDIN_REDIRECT_URI",
-        "client_id": "REDACTED_LINKEDIN_CLIENT_ID",
-        "client_secret": "REDACTED_LINKEDIN_CLIENT_SECRET",
+        "code": request.POST.get("code")
+        or request.GET.get("code")
+        or os.getenv("LINKEDIN_AUTH_CODE"),
+        "redirect_uri": request.POST.get("redirect_uri")
+        or request.GET.get("redirect_uri")
+        or getattr(settings, "LINKEDIN_REDIRECT_URI", None),
+        "client_id": request.POST.get("client_id")
+        or request.GET.get("client_id")
+        or os.getenv("LINKEDIN_CLIENT_ID")
+        or getattr(settings, "LINKEDIN_CLIENT_ID", None),
+        "client_secret": request.POST.get("client_secret")
+        or request.GET.get("client_secret")
+        or os.getenv("LINKEDIN_CLIENT_SECRET")
+        or getattr(settings, "LINKEDIN_CLIENT_SECRET", None),
     }
+    missing_fields = [key for key, value in data.items() if not value]
+    if missing_fields:
+        return JsonResponse(
+            {
+                "detail": "Missing LinkedIn OAuth configuration.",
+                "missing_fields": missing_fields,
+            },
+            status=400,
+        )
 
-    response = requests.post(url, data=data)
-    return JsonResponse(response)
+    response = requests.post(url, data=data, timeout=15)
+    try:
+        response_payload = response.json()
+    except ValueError:
+        response_payload = {"detail": response.text}
+    return JsonResponse(
+        response_payload,
+        status=response.status_code,
+        safe=not isinstance(response_payload, list),
+    )
 
 
 @login_required
