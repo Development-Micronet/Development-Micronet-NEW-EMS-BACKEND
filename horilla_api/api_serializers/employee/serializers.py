@@ -261,8 +261,74 @@ class EmployeeSerializer(serializers.ModelSerializer):
             write_only=True, required=False, allow_blank=True
         )
 
+    # def create(self, validated_data):
+    #     # Extract username and password from validated data
+    #     username = validated_data.pop("username", None)
+    #     secret_field = "pass" "word"
+    #     user_secret = validated_data.pop(secret_field, None)
+    #     role = validated_data.get("role", "user")
+
+    #     # Generate badge_id
+    #     validated_data["badge_id"] = get_next_badge_id()
+
+    #     # Create User if username provided
+    #     user = None
+    #     with transaction.atomic():
+    #         if username:
+    #             # Check if username already exists
+    #             if User.objects.filter(username=username).exists():
+    #                 raise serializers.ValidationError(
+    #                     f"Username '{username}' already exists. Please choose a different username."
+    #                 )
+
+    #             # Generate password if not provided
+    #             if not user_secret:
+    #                 user_secret = secrets.token_urlsafe(12)
+
+    #             # Create Django User. Avoid calling user.save() afterwards because
+    #             # the User post_save signal auto-creates an Employee for superusers.
+    #             create_user_kwargs = dict(
+    #                 username=username,
+    #                 email=validated_data.get("email"),
+    #                 first_name=validated_data.get("employee_first_name", ""),
+    #                 last_name=validated_data.get("employee_last_name", ""),
+    #                 **{secret_field: user_secret},
+    #             )
+    #             user = User.objects.create_user(**create_user_kwargs)
+    #             is_admin = role == "admin"
+    #             User.objects.filter(pk=user.pk).update(
+    #                 is_superuser=is_admin,
+    #                 is_staff=is_admin,
+    #             )
+    #             user.is_superuser = is_admin
+    #             user.is_staff = is_admin
+    #             validated_data["employee_user_id"] = user
+
+    #         # Reuse any employee row that may already exist for this user.
+    #         existing_employee = None
+    #         if user is not None:
+    #             existing_employee = Employee.objects.filter(employee_user_id=user).first()
+
+    #         if existing_employee is not None:
+    #             employee = super().update(existing_employee, validated_data)
+    #         else:
+    #             employee = super().create(validated_data)
+
+    #     # Send welcome email with credentials
+    #     if user and employee.email:
+    #         # Store email details for sending (after employee is fully created)
+    #         employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
+    #         email = employee.email
+
+    #         self._send_welcome_email(
+    #             employee_name=employee_name,
+    #             email=email,
+    #             username=username,
+    #             password=user_secret,
+    #         )
+
+    #     return employee
     def create(self, validated_data):
-        # Extract username and password from validated data
         username = validated_data.pop("username", None)
         secret_field = "pass" "word"
         user_secret = validated_data.pop(secret_field, None)
@@ -271,58 +337,47 @@ class EmployeeSerializer(serializers.ModelSerializer):
         # Generate badge_id
         validated_data["badge_id"] = get_next_badge_id()
 
-        # Create User if username provided
         user = None
+
         with transaction.atomic():
             if username:
-                # Check if username already exists
-                if User.objects.filter(username=username).exists():
+                # Case-insensitive username check
+                if User.objects.filter(username__iexact=username).exists():
                     raise serializers.ValidationError(
-                        f"Username '{username}' already exists. Please choose a different username."
+                        {"username": f"Username '{username}' already exists."}
                     )
 
                 # Generate password if not provided
                 if not user_secret:
                     user_secret = secrets.token_urlsafe(12)
 
-                # Create Django User. Avoid calling user.save() afterwards because
-                # the User post_save signal auto-creates an Employee for superusers.
-                create_user_kwargs = dict(
+                # Create user
+                user = User.objects.create_user(
                     username=username,
                     email=validated_data.get("email"),
                     first_name=validated_data.get("employee_first_name", ""),
                     last_name=validated_data.get("employee_last_name", ""),
-                    **{secret_field: user_secret},
+                    password=user_secret,
                 )
-                user = User.objects.create_user(**create_user_kwargs)
+
+                # Set role
                 is_admin = role == "admin"
-                User.objects.filter(pk=user.pk).update(
-                    is_superuser=is_admin,
-                    is_staff=is_admin,
-                )
                 user.is_superuser = is_admin
                 user.is_staff = is_admin
+                user.save()
+
                 validated_data["employee_user_id"] = user
 
-            # Reuse any employee row that may already exist for this user.
-            existing_employee = None
-            if user is not None:
-                existing_employee = Employee.objects.filter(employee_user_id=user).first()
+            # ✅ Create employee ONLY ONCE
+            employee = super().create(validated_data)
 
-            if existing_employee is not None:
-                employee = super().update(existing_employee, validated_data)
-            else:
-                employee = super().create(validated_data)
-
-        # Send welcome email with credentials
+        # ✅ Send email AFTER successful creation
         if user and employee.email:
-            # Store email details for sending (after employee is fully created)
             employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
-            email = employee.email
 
             self._send_welcome_email(
                 employee_name=employee_name,
-                email=email,
+                email=employee.email,
                 username=username,
                 password=user_secret,
             )
