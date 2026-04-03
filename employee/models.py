@@ -611,47 +611,54 @@ class Employee(models.Model):
                 )
 
     def save(self, *args, **kwargs):
-        self.full_clean()
-        
-        # Check if the associated user is a superuser and set role to admin
         if self.employee_user_id and self.employee_user_id.is_superuser:
             self.role = "admin"
-        
+        self.full_clean()
         super().save(*args, **kwargs)
-
-        request = getattr(horilla_middlewares._thread_locals, "request", None)
-        if request and not self.is_active and self.get_archive_condition() is not False:
-            self.is_active = True
-            super().save(*args, **kwargs)
-        employee = self
-
-        if employee.employee_user_id is None:
-            # Create user if no corresponding user exists
-            username = self.email
-            password = self.phone
-
-            user = User.objects.create_user(
-                username=username,
-                email=username,
-                password=password,
-                is_new_employee=True,
-            )
-            if not user:
-                user = User.objects.create_user(
-                    username=username, email=username, password=password
-                )
-            self.employee_user_id = user
-            # default permissions
-            change_ownprofile = Permission.objects.get(codename="change_ownprofile")
-            view_ownprofile = Permission.objects.get(codename="view_ownprofile")
-            user.user_permissions.add(view_ownprofile)
-            user.user_permissions.add(change_ownprofile)
-
-        if not hasattr(self, "employee_work_info"):
-            EmployeeWorkInformation.objects.get_or_create(employee_id=self)
-            return self.save()
-
         return self
+
+    # def save(self, *args, **kwargs):
+    #     self.full_clean()
+
+    #     # Check if the associated user is a superuser and set role to admin
+    #     if self.employee_user_id and self.employee_user_id.is_superuser:
+    #         self.role = "admin"
+
+    #     super().save(*args, **kwargs)
+
+    #     request = getattr(horilla_middlewares._thread_locals, "request", None)
+    #     if request and not self.is_active and self.get_archive_condition() is not False:
+    #         self.is_active = True
+    #         super().save(*args, **kwargs)
+    #     employee = self
+
+    #     if employee.employee_user_id is None:
+    #         # Create user if no corresponding user exists
+    #         username = self.email
+    #         password = self.phone
+
+    #         user = User.objects.create_user(
+    #             username=username,
+    #             email=username,
+    #             password=password,
+    #             is_new_employee=True,
+    #         )
+    #         if not user:
+    #             user = User.objects.create_user(
+    #                 username=username, email=username, password=password
+    #             )
+    #         self.employee_user_id = user
+    #         # default permissions
+    #         change_ownprofile = Permission.objects.get(codename="change_ownprofile")
+    #         view_ownprofile = Permission.objects.get(codename="view_ownprofile")
+    #         user.user_permissions.add(view_ownprofile)
+    #         user.user_permissions.add(change_ownprofile)
+
+    #     if not hasattr(self, "employee_work_info"):
+    #         EmployeeWorkInformation.objects.get_or_create(employee_id=self)
+    #         return self.save()
+
+    #     return self
 
 
 class EmployeeTag(HorillaModel):
@@ -1046,7 +1053,7 @@ class BonusPoint(HorillaModel):
 def set_superuser_role_to_admin(sender, instance, created, **kwargs):
     """
     Signal handler to automatically set the employee role to 'admin' when a superuser is created or updated.
-    
+
     Args:
         sender (User): The model class (User) sending the signal.
         instance (User): The instance of the User model triggering the post-save signal.
@@ -1065,7 +1072,7 @@ def set_superuser_role_to_admin(sender, instance, created, **kwargs):
                     "email": instance.email or f"{instance.username}@example.com",
                     "phone": "0000000000",
                     "role": "admin",  # Set role to admin for superuser
-                }
+                },
             )
             # If employee already exists but doesn't have admin role, update it
             if not created_emp and employee.role != "admin":

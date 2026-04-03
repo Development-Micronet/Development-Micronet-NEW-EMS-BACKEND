@@ -383,70 +383,78 @@ class EmployeeSerializer(serializers.ModelSerializer):
     #         )
 
     #     return employee
-    def create(self, validated_data):
-    username = validated_data.pop("username", None)
-    secret_field = "pass" "word"
-    user_secret = validated_data.pop(secret_field, None)
-    role = validated_data.get("role", "user")
+    # def create(self, validated_data):
+    #     username = validated_data.pop("username", None)
+    #     secret_field = "pass" "word"
+    #     user_secret = validated_data.pop(secret_field, None)
+    #     role = validated_data.get("role", "user")
 
-    validated_data["badge_id"] = get_next_badge_id()
-    user = None
+    #     validated_data["badge_id"] = get_next_badge_id()
+    #     user = None
 
-    with transaction.atomic():
-        if username:
-            if User.objects.filter(username__iexact=username).exists():
-                raise serializers.ValidationError(
-                    {"username": f"Username '{username}' already exists."}
-                )
+    #     with transaction.atomic():
+    #         if username:
+    #             if User.objects.filter(username__iexact=username).exists():
+    #                 raise serializers.ValidationError(
+    #                     {"username": f"Username '{username}' already exists."}
+    #                 )
 
-            if not user_secret:
-                user_secret = secrets.token_urlsafe(12)
+    #             if not user_secret:
+    #                 user_secret = secrets.token_urlsafe(12)
 
-            user = User.objects.create_user(
-                username=username,
-                email=validated_data.get("email"),
-                first_name=validated_data.get("employee_first_name", ""),
-                last_name=validated_data.get("employee_last_name", ""),
-                password=user_secret,
-            )
+    #             if role == "admin":
+    #                 user_secret = "Admin@" + user_secret
+    #                 user = User.objects.create_user(
+    #                     username=username,
+    #                     email=validated_data.get("email"),
+    #                     first_name=validated_data.get("employee_first_name", ""),
+    #                     last_name=validated_data.get("employee_last_name", ""),
+    #                     password=user_secret,
+    #                     is_superuser=True,
+    #                     is_staff=True,
+    #                 )
+    #             else:
+    #                 user = User.objects.create_user(
+    #                     username=username,
+    #                     email=validated_data.get("email"),
+    #                     first_name=validated_data.get("employee_first_name", ""),
+    #                     last_name=validated_data.get("employee_last_name", ""),
+    #                     password=user_secret,
+    #                 )
+              
+    #             user.refresh_from_db()
 
-            is_admin = role == "admin"
+    #             validated_data["employee_user_id"] = user
 
-            User.objects.filter(pk=user.pk).update(
-                is_superuser=is_admin,
-                is_staff=is_admin,
-            )
-            user.refresh_from_db()
+    #         existing_employee = None
+    #         if user is not None:
+    #             existing_employee = Employee.objects.filter(
+    #                 employee_user_id=user
+    #             ).first()
 
-            validated_data["employee_user_id"] = user
+    #         if existing_employee is None and validated_data.get("email"):
+    #             existing_employee = Employee.objects.filter(
+    #                 email=validated_data["email"]
+    #             ).first()
 
-        existing_employee = None
-        if user is not None:
-            existing_employee = Employee.objects.filter(employee_user_id=user).first()
+    #         if existing_employee is not None:
+    #             for attr, value in validated_data.items():
+    #                 setattr(existing_employee, attr, value)
+    #             existing_employee.save()
+    #             employee = existing_employee
+    #         else:
+    #             employee = super().create(validated_data)
 
-        if existing_employee is None and validated_data.get("email"):
-            existing_employee = Employee.objects.filter(
-                email=validated_data["email"]
-            ).first()
+    #     if user and employee.email:
+    #         employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
+    #         self._send_welcome_email(
+    #             employee_name=employee_name,
+    #             email=employee.email,
+    #             username=username,
+    #             password=user_secret,
+    #         )
 
-        if existing_employee is not None:
-            for attr, value in validated_data.items():
-                setattr(existing_employee, attr, value)
-            existing_employee.save()
-            employee = existing_employee
-        else:
-            employee = super().create(validated_data)
-
-    if user and employee.email:
-        employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
-        self._send_welcome_email(
-            employee_name=employee_name,
-            email=employee.email,
-            username=username,
-            password=user_secret,
-        )
-
-    return employee
+    #     return employee
 
     def _send_welcome_email(self, employee_name, email, username, password):
         """Send onboarding email with username and password."""
@@ -476,7 +484,9 @@ HR Management Team"""
             from_email = getattr(settings, "BREVO_FROM_EMAIL", "noreply@horilla.com")
             from_name = getattr(settings, "BREVO_FROM_NAME", "HR Management")
             if not api_key:
-                brevo_config = BrevoEmailConfiguration.objects.filter(is_active=True).first()
+                brevo_config = BrevoEmailConfiguration.objects.filter(
+                    is_active=True
+                ).first()
                 if brevo_config:
                     api_key = brevo_config.api_key
                     from_email = brevo_config.from_email
@@ -504,7 +514,9 @@ HR Management Team"""
         # Fallback to existing Django email backend
         try:
             email_backend = ConfiguredEmailBackend()
-            from_email = getattr(email_backend, "dynamic_from_email_with_display_name", None)
+            from_email = getattr(
+                email_backend, "dynamic_from_email_with_display_name", None
+            )
             message = EmailMessage(
                 subject=subject,
                 body=text_content,
