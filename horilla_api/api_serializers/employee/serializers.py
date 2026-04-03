@@ -328,61 +328,118 @@ class EmployeeSerializer(serializers.ModelSerializer):
     #         )
 
     #     return employee
+    # def create(self, validated_data):
+    #     username = validated_data.pop("username", None)
+    #     secret_field = "pass" "word"
+    #     user_secret = validated_data.pop(secret_field, None)
+    #     role = validated_data.get("role", "user")
+
+    #     # Generate badge_id
+    #     validated_data["badge_id"] = get_next_badge_id()
+
+    #     user = None
+
+    #     with transaction.atomic():
+    #         if username:
+    #             # Case-insensitive username check
+    #             if User.objects.filter(username__iexact=username).exists():
+    #                 raise serializers.ValidationError(
+    #                     {"username": f"Username '{username}' already exists."}
+    #                 )
+
+    #             # Generate password if not provided
+    #             if not user_secret:
+    #                 user_secret = secrets.token_urlsafe(12)
+
+    #             # Create user
+    #             user = User.objects.create_user(
+    #                 username=username,
+    #                 email=validated_data.get("email"),
+    #                 first_name=validated_data.get("employee_first_name", ""),
+    #                 last_name=validated_data.get("employee_last_name", ""),
+    #                 password=user_secret,
+    #             )
+
+    #             # Set role
+    #             is_admin = role == "admin"
+    #             user.is_superuser = is_admin
+    #             user.is_staff = is_admin
+    #             user.save()
+
+    #             validated_data["employee_user_id"] = user
+
+    #         # ✅ Create employee ONLY ONCE
+    #         employee = super().create(validated_data)
+
+    #     # ✅ Send email AFTER successful creation
+    #     if user and employee.email:
+    #         employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
+
+    #         self._send_welcome_email(
+    #             employee_name=employee_name,
+    #             email=employee.email,
+    #             username=username,
+    #             password=user_secret,
+    #         )
+
+    #     return employee
     def create(self, validated_data):
-        username = validated_data.pop("username", None)
-        secret_field = "pass" "word"
-        user_secret = validated_data.pop(secret_field, None)
-        role = validated_data.get("role", "user")
+    username = validated_data.pop("username", None)
+    secret_field = "pass" "word"
+    user_secret = validated_data.pop(secret_field, None)
+    role = validated_data.get("role", "user")
 
-        # Generate badge_id
-        validated_data["badge_id"] = get_next_badge_id()
+    validated_data["badge_id"] = get_next_badge_id()
+    user = None
 
-        user = None
-
-        with transaction.atomic():
-            if username:
-                # Case-insensitive username check
-                if User.objects.filter(username__iexact=username).exists():
-                    raise serializers.ValidationError(
-                        {"username": f"Username '{username}' already exists."}
-                    )
-
-                # Generate password if not provided
-                if not user_secret:
-                    user_secret = secrets.token_urlsafe(12)
-
-                # Create user
-                user = User.objects.create_user(
-                    username=username,
-                    email=validated_data.get("email"),
-                    first_name=validated_data.get("employee_first_name", ""),
-                    last_name=validated_data.get("employee_last_name", ""),
-                    password=user_secret,
+    with transaction.atomic():
+        if username:
+            if User.objects.filter(username__iexact=username).exists():
+                raise serializers.ValidationError(
+                    {"username": f"Username '{username}' already exists."}
                 )
 
-                # Set role
-                is_admin = role == "admin"
-                user.is_superuser = is_admin
-                user.is_staff = is_admin
-                user.save()
+            if not user_secret:
+                user_secret = secrets.token_urlsafe(12)
 
-                validated_data["employee_user_id"] = user
-
-            # ✅ Create employee ONLY ONCE
-            employee = super().create(validated_data)
-
-        # ✅ Send email AFTER successful creation
-        if user and employee.email:
-            employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
-
-            self._send_welcome_email(
-                employee_name=employee_name,
-                email=employee.email,
+            user = User.objects.create_user(
                 username=username,
+                email=validated_data.get("email"),
+                first_name=validated_data.get("employee_first_name", ""),
+                last_name=validated_data.get("employee_last_name", ""),
                 password=user_secret,
             )
 
-        return employee
+            is_admin = role == "admin"
+
+            if is_admin:
+                User.objects.filter(pk=user.pk).update(
+                    is_superuser=True,
+                    is_staff=True,
+                )
+                user.refresh_from_db()
+
+            validated_data["employee_user_id"] = user
+
+        existing_employee = None
+        if user is not None:
+            existing_employee = Employee.objects.filter(employee_user_id=user).first()
+
+        if existing_employee is not None:
+            employee = super().update(existing_employee, validated_data)
+        else:
+            employee = super().create(validated_data)
+
+    if user and employee.email:
+        employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
+        self._send_welcome_email(
+            employee_name=employee_name,
+            email=employee.email,
+            username=username,
+            password=user_secret,
+        )
+
+    return employee
 
     def _send_welcome_email(self, employee_name, email, username, password):
         """Send onboarding email with username and password."""
