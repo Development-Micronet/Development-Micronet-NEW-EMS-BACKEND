@@ -6,6 +6,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import EmailMessage
+from django.db import transaction
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from django.utils import timezone
@@ -272,37 +273,46 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
         # Create User if username provided
         user = None
-        if username:
-            # Check if username already exists
-            if User.objects.filter(username=username).exists():
-                raise serializers.ValidationError(
-                    f"Username '{username}' already exists. Please choose a different username."
+        with transaction.atomic():
+            if username:
+                # Check if username already exists
+                if User.objects.filter(username=username).exists():
+                    raise serializers.ValidationError(
+                        f"Username '{username}' already exists. Please choose a different username."
+                    )
+
+                # Generate password if not provided
+                if not user_secret:
+                    user_secret = secrets.token_urlsafe(12)
+
+                # Create Django User. Avoid calling user.save() afterwards because
+                # the User post_save signal auto-creates an Employee for superusers.
+                create_user_kwargs = dict(
+                    username=username,
+                    email=validated_data.get("email"),
+                    first_name=validated_data.get("employee_first_name", ""),
+                    last_name=validated_data.get("employee_last_name", ""),
+                    **{secret_field: user_secret},
                 )
+                user = User.objects.create_user(**create_user_kwargs)
+                is_admin = role == "admin"
+                User.objects.filter(pk=user.pk).update(
+                    is_superuser=is_admin,
+                    is_staff=is_admin,
+                )
+                user.is_superuser = is_admin
+                user.is_staff = is_admin
+                validated_data["employee_user_id"] = user
 
-            # Generate password if not provided
-            if not user_secret:
-                user_secret = secrets.token_urlsafe(12)
+            # Reuse any employee row that may already exist for this user.
+            existing_employee = None
+            if user is not None:
+                existing_employee = Employee.objects.filter(employee_user_id=user).first()
 
-            # Create Django User
-            create_user_kwargs = dict(
-                username=username,
-                email=validated_data.get("email"),
-                first_name=validated_data.get("employee_first_name", ""),
-                last_name=validated_data.get("employee_last_name", ""),
-                **{secret_field: user_secret},
-            )
-            user = User.objects.create_user(**create_user_kwargs)
-            if role == "admin":
-                user.is_superuser = True
-                user.is_staff = True
+            if existing_employee is not None:
+                employee = super().update(existing_employee, validated_data)
             else:
-                user.is_superuser = False
-                user.is_staff = False
-            validated_data["employee_user_id"] = user
-            user.save()
-
-        # Create Employee
-        employee = super().create(validated_data)
+                employee = super().create(validated_data)
 
         # Send welcome email with credentials
         if user and employee.email:

@@ -1,6 +1,10 @@
+import time
+from unittest.mock import patch
+
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import resolve
+from django.test.utils import override_settings
 from rest_framework.test import APIClient
 
 from base.models import Company
@@ -46,6 +50,73 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
 
         assert response.status_code == 401
         assert response.json()["error"] == "Invalid credentials"
+
+    @override_settings(RETURN_RESET_LINK_IN_FORGOT_PASSWORD_RESPONSE=True)
+    @patch("horilla_api.api_views.auth.views.ForgotPasswordAPIView._send_with_brevo")
+    def test_forgot_password_returns_usable_reset_token_for_five_minutes(
+        self, mock_send_with_brevo
+    ):
+        mock_send_with_brevo.return_value = True
+
+        forgot_response = self.client.post(
+            "/api/auth/forgot-password/",
+            {"email": self.employee.email},
+            format="json",
+        )
+
+        assert forgot_response.status_code == 200
+        forgot_data = forgot_response.json()
+        assert "uid" in forgot_data
+        assert "token" in forgot_data
+
+        reset_response = self.client.post(
+            "/api/auth/reset-password/",
+            {
+                "uid": forgot_data["uid"],
+                "token": forgot_data["token"],
+                "new_password": "NewPassword@123",
+                "confirm_password": "NewPassword@123",
+            },
+            format="json",
+        )
+
+        assert reset_response.status_code == 200
+        assert reset_response.json()["success"] is True
+        self.user.refresh_from_db()
+        assert self.user.check_password("NewPassword@123") is True
+
+    @override_settings(
+        RETURN_RESET_LINK_IN_FORGOT_PASSWORD_RESPONSE=True,
+        PASSWORD_RESET_TIMEOUT=1,
+    )
+    @patch("horilla_api.api_views.auth.views.ForgotPasswordAPIView._send_with_brevo")
+    def test_reset_password_rejects_expired_signed_token(self, mock_send_with_brevo):
+        mock_send_with_brevo.return_value = True
+
+        forgot_response = self.client.post(
+            "/api/auth/forgot-password/",
+            {"email": self.employee.email},
+            format="json",
+        )
+
+        assert forgot_response.status_code == 200
+        forgot_data = forgot_response.json()
+        time.sleep(2)
+
+        reset_response = self.client.post(
+            "/api/auth/reset-password/",
+            {
+                "uid": forgot_data["uid"],
+                "token": forgot_data["token"],
+                "new_password": "ExpiredPassword@123",
+                "confirm_password": "ExpiredPassword@123",
+            },
+            format="json",
+        )
+
+        assert reset_response.status_code == 400
+        assert reset_response.json()["success"] is False
+        assert "expired" in reset_response.json()["message"].lower()
 
     def test_recruitment_interviews_url_resolves_to_new_api_view(self):
         match = resolve("/api/recruitment/interviews/")

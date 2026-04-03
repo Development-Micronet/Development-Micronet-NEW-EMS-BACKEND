@@ -1,10 +1,10 @@
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
-from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.mail import EmailMessage
+from django.core import signing
 from django.db.models import Q
 from django.contrib.auth.password_validation import validate_password
 from django.utils import timezone
@@ -311,6 +311,21 @@ logger = logging.getLogger(__name__)
 
 class ForgotPasswordAPIView(APIView):
     permission_classes = [AllowAny]
+    TOKEN_SALT = "horilla-api-password-reset"
+
+    @classmethod
+    def get_reset_token_timeout(cls):
+        return int(getattr(settings, "PASSWORD_RESET_TIMEOUT", 300))
+
+    @classmethod
+    def make_reset_token(cls, user):
+        return signing.dumps(
+            {
+                "uid": user.pk,
+                "password": user.password,
+            },
+            salt=cls.TOKEN_SALT,
+        )
 
     # ==============================
     # Get Brevo Credentials
@@ -351,6 +366,7 @@ class ForgotPasswordAPIView(APIView):
             return False
 
         try:
+            expiry_minutes = max(1, self.get_reset_token_timeout() // 60)
             html_body = f"""
                 <p>You requested a password reset.</p>
                 <p>
@@ -362,6 +378,7 @@ class ForgotPasswordAPIView(APIView):
                         Reset your password
                     </a>
                 </p>
+                <p>This reset link will expire in {expiry_minutes} minutes.</p>
                 <p><strong>UID:</strong> {uid}</p>
                 <p><strong>Token:</strong> {token}</p>
                 <p>If you did not request this, you can ignore this email.</p>
@@ -475,7 +492,7 @@ class ForgotPasswordAPIView(APIView):
 
         # Generate reset token
         uid = urlsafe_base64_encode(force_bytes(user.pk))
-        token = default_token_generator.make_token(user)
+        token = self.make_reset_token(user)
 
         reset_base_url = getattr(settings, "FRONTEND_RESET_PASSWORD_URL", "").strip()
         if not reset_base_url:
@@ -500,6 +517,7 @@ class ForgotPasswordAPIView(APIView):
         body = (
             "You requested a password reset.\n\n"
             f"Use the following link to reset your password:\n{reset_link}\n\n"
+            f"This reset link will expire in {self.get_reset_token_timeout() // 60 or 5} minutes.\n\n"
             f"UID: {uid}\n"
             f"Token: {token}\n\n"
             "If you did not request this, you can safely ignore this email."
@@ -561,6 +579,7 @@ class ForgotPasswordAPIView(APIView):
 class ResetPasswordAPIView(APIView):
     permission_classes = [AllowAny]
     COOLDOWN_SECONDS = 300
+    TOKEN_SALT = ForgotPasswordAPIView.TOKEN_SALT
 
     @staticmethod
     def _get_user_from_uid(uid):
@@ -569,6 +588,33 @@ class ResetPasswordAPIView(APIView):
             return User.objects.filter(pk=user_id, is_active=True).first()
         except Exception:
             return None
+
+    @classmethod
+    def get_reset_token_timeout(cls):
+        return int(getattr(settings, "PASSWORD_RESET_TIMEOUT", 300))
+
+    @classmethod
+    def is_valid_reset_token(cls, user, uid, token):
+        try:
+            payload = signing.loads(
+                token,
+                salt=cls.TOKEN_SALT,
+                max_age=cls.get_reset_token_timeout(),
+            )
+        except signing.SignatureExpired:
+            return False, "This reset link has expired. Please request a new link."
+        except signing.BadSignature:
+            return False, "Invalid or expired reset link."
+
+        if str(payload.get("uid")) != str(user.pk) or str(user.pk) != str(
+            force_str(urlsafe_base64_decode(uid))
+        ):
+            return False, "Invalid or expired reset link."
+
+        if payload.get("password") != user.password:
+            return False, "Invalid or expired reset link."
+
+        return True, None
 
     @document_api(
         operation_description="Reset password using uid/token and apply a 5-minute cooldown after success",
@@ -604,9 +650,17 @@ class ResetPasswordAPIView(APIView):
         payload = serializer.validated_data
 
         user = self._get_user_from_uid(payload["uid"])
-        if not user or not default_token_generator.check_token(user, payload["token"]):
+        if not user:
             return Response(
                 {"success": False, "message": "Invalid or expired reset link."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        is_valid_token, token_error = self.is_valid_reset_token(
+            user, payload["uid"], payload["token"]
+        )
+        if not is_valid_token:
+            return Response(
+                {"success": False, "message": token_error},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
