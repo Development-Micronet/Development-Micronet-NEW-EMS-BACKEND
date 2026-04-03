@@ -384,69 +384,69 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     #     return employee
     def create(self, validated_data):
-    username = validated_data.pop("username", None)
-    secret_field = "pass" "word"
-    user_secret = validated_data.pop(secret_field, None)
-    role = validated_data.get("role", "user")
-
-    validated_data["badge_id"] = get_next_badge_id()
-    user = None
-
-    with transaction.atomic():
-        if username:
-            if User.objects.filter(username__iexact=username).exists():
-                raise serializers.ValidationError(
-                    {"username": f"Username '{username}' already exists."}
+        username = validated_data.pop("username", None)
+        secret_field = "pass" "word"
+        user_secret = validated_data.pop(secret_field, None)
+        role = validated_data.get("role", "user")
+    
+        validated_data["badge_id"] = get_next_badge_id()
+        user = None
+    
+        with transaction.atomic():
+            if username:
+                if User.objects.filter(username__iexact=username).exists():
+                    raise serializers.ValidationError(
+                        {"username": f"Username '{username}' already exists."}
+                    )
+    
+                if not user_secret:
+                    user_secret = secrets.token_urlsafe(12)
+    
+                user = User.objects.create_user(
+                    username=username,
+                    email=validated_data.get("email"),
+                    first_name=validated_data.get("employee_first_name", ""),
+                    last_name=validated_data.get("employee_last_name", ""),
+                    password=user_secret,
                 )
-
-            if not user_secret:
-                user_secret = secrets.token_urlsafe(12)
-
-            user = User.objects.create_user(
+    
+                is_admin = role == "admin"
+    
+                User.objects.filter(pk=user.pk).update(
+                    is_superuser=is_admin,
+                    is_staff=is_admin,
+                )
+                user.refresh_from_db()
+    
+                validated_data["employee_user_id"] = user
+    
+            existing_employee = None
+            if user is not None:
+                existing_employee = Employee.objects.filter(employee_user_id=user).first()
+    
+            if existing_employee is None and validated_data.get("email"):
+                existing_employee = Employee.objects.filter(
+                    email=validated_data["email"]
+                ).first()
+    
+            if existing_employee is not None:
+                for attr, value in validated_data.items():
+                    setattr(existing_employee, attr, value)
+                existing_employee.save()
+                employee = existing_employee
+            else:
+                employee = super().create(validated_data)
+    
+        if user and employee.email:
+            employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
+            self._send_welcome_email(
+                employee_name=employee_name,
+                email=employee.email,
                 username=username,
-                email=validated_data.get("email"),
-                first_name=validated_data.get("employee_first_name", ""),
-                last_name=validated_data.get("employee_last_name", ""),
                 password=user_secret,
             )
-
-            is_admin = role == "admin"
-
-            User.objects.filter(pk=user.pk).update(
-                is_superuser=is_admin,
-                is_staff=is_admin,
-            )
-            user.refresh_from_db()
-
-            validated_data["employee_user_id"] = user
-
-        existing_employee = None
-        if user is not None:
-            existing_employee = Employee.objects.filter(employee_user_id=user).first()
-
-        if existing_employee is None and validated_data.get("email"):
-            existing_employee = Employee.objects.filter(
-                email=validated_data["email"]
-            ).first()
-
-        if existing_employee is not None:
-            for attr, value in validated_data.items():
-                setattr(existing_employee, attr, value)
-            existing_employee.save()
-            employee = existing_employee
-        else:
-            employee = super().create(validated_data)
-
-    if user and employee.email:
-        employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
-        self._send_welcome_email(
-            employee_name=employee_name,
-            email=employee.email,
-            username=username,
-            password=user_secret,
-        )
-
-    return employee
+    
+        return employee
 
     def _send_welcome_email(self, employee_name, email, username, password):
         """Send onboarding email with username and password."""
