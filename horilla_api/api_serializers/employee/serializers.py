@@ -412,12 +412,11 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
             is_admin = role == "admin"
 
-            if is_admin:
-                User.objects.filter(pk=user.pk).update(
-                    is_superuser=True,
-                    is_staff=True,
-                )
-                user.refresh_from_db()
+            User.objects.filter(pk=user.pk).update(
+                is_superuser=is_admin,
+                is_staff=is_admin,
+            )
+            user.refresh_from_db()
 
             validated_data["employee_user_id"] = user
 
@@ -425,8 +424,16 @@ class EmployeeSerializer(serializers.ModelSerializer):
         if user is not None:
             existing_employee = Employee.objects.filter(employee_user_id=user).first()
 
+        if existing_employee is None and validated_data.get("email"):
+            existing_employee = Employee.objects.filter(
+                email=validated_data["email"]
+            ).first()
+
         if existing_employee is not None:
-            employee = super().update(existing_employee, validated_data)
+            for attr, value in validated_data.items():
+                setattr(existing_employee, attr, value)
+            existing_employee.save()
+            employee = existing_employee
         else:
             employee = super().create(validated_data)
 
