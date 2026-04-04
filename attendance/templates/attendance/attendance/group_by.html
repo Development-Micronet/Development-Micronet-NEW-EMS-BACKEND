@@ -487,7 +487,7 @@
                             href='{% url "validate-this-attendance" attendance.id %}?vpage={{validate_attendances.number}}&{{attendance_list.dynamic_name}}={{ attendance_list.list.number }}'
                             hx-target="#updateAttendanceBody"
                             data-req="/attendance/request-attendance-view/?id={{attendance.id}}"
-                            onclick="event.stopPropagation(); {% if attendance.is_validate_request %}  event.preventDefault(); showSweetAlert($(this).data('req')); {% endif %}"
+                            onclick="event.stopPropagation(); {% if attendance.is_validate_request %} event.preventDefault(); showSweetAlert($(this).data('req')); {% else %} localStorage.setItem('activeTabAttendance', '#tab_2'); {% endif %}"
                             class="oh-btn oh-btn--info"
                             >
                             {% trans "Validate" %}

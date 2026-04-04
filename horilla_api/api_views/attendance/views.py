@@ -75,9 +75,16 @@ class AttendanceBulkValidateView(APIView):
             )
         from attendance.models import Attendance
 
-        updated = Attendance.objects.filter(id__in=ids).update(
-            attendance_validated=True
+        updated = 0
+        attendances = Attendance.objects.filter(id__in=ids).select_related(
+            "employee_id"
         )
+        for attendance in attendances:
+            if attendance.attendance_validated:
+                continue
+            attendance.attendance_validated = True
+            attendance.save()
+            updated += 1
         return Response({"validated": updated, "errors": []}, status=200)
 
 
@@ -173,7 +180,13 @@ class ValidateAttendanceByEmployeeView(APIView):
 
     def post(self, request, employee_id):
         attendances = Attendance.objects.filter(employee_id=employee_id)
-        updated = attendances.update(attendance_validated=True)
+        updated = 0
+        for attendance in attendances:
+            if attendance.attendance_validated:
+                continue
+            attendance.attendance_validated = True
+            attendance.save()
+            updated += 1
         return Response(
             {
                 "employee_id": employee_id,
@@ -247,7 +260,16 @@ class OnBreakEmployeesAPIView(APIView):
         return Response({"on_break_employees": data, "count": len(data)}, status=200)
 
 
+<<<<<<< HEAD
 from attendance.models import Attendance, AttendanceActivity, EmployeeShiftDay
+=======
+from attendance.models import (
+    Attendance,
+    AttendanceActivity,
+    BatchAttendance,
+    EmployeeShiftDay,
+)
+>>>>>>> 4593e5a (Removed LinkedIn secret)
 from attendance.methods.utils import format_time, strtime_seconds
 from attendance.views.clock_in_out import *
 from attendance.signals import (
@@ -264,8 +286,9 @@ from attendance.views.dashboard import (
 from attendance.views.views import *
 from base.backends import ConfiguredEmailBackend
 from base.methods import generate_pdf, is_reportingmanager
-from base.models import HorillaMailTemplate
+from base.models import EmployeeShift, HorillaMailTemplate, WorkType
 from employee.filters import EmployeeFilter
+from employee.models import Employee, is_admin_user
 
 from ...api_decorators.base.decorators import (
     manager_permission_required,
@@ -295,6 +318,16 @@ from ...docs import document_api
 # Create your views here.
 
 
+def has_full_attendance_access(user):
+    if not getattr(user, "is_authenticated", False):
+        return False
+    return bool(
+        is_admin_user(user)
+        or user.has_perm("attendance.view_attendance")
+        or user.has_perm("attendance.view_attendanceovertime")
+    )
+
+
 def query_dict(data):
     query_dict = QueryDict("", mutable=True)
     for key, value in data.items():
@@ -307,6 +340,18 @@ def query_dict(data):
 
 
 LATE_VALIDATION_THRESHOLD = datetime.strptime("10:30", "%H:%M").time()
+DEFAULT_ATTENDANCE_REQUEST_SHIFTS = [
+    "Regular Shift",
+    "Morning Shift",
+    "Night Shift",
+]
+DEFAULT_ATTENDANCE_REQUEST_WORK_TYPES = [
+    "Work From Office",
+    "Work From Home",
+    "Hybride",
+    "Remote",
+]
+DEFAULT_ATTENDANCE_REQUEST_BATCH = "Dynamic Create"
 
 
 def _coerce_time_value(value):
@@ -320,6 +365,72 @@ def _coerce_time_value(value):
         except ValueError:
             continue
     return None
+
+
+def ensure_default_attendance_request_references():
+    shifts = [
+        EmployeeShift.objects.get_or_create(employee_shift=name)[0]
+        for name in DEFAULT_ATTENDANCE_REQUEST_SHIFTS
+    ]
+    work_types = [
+        WorkType.objects.get_or_create(work_type=name)[0]
+        for name in DEFAULT_ATTENDANCE_REQUEST_WORK_TYPES
+    ]
+    batch, _ = BatchAttendance.objects.get_or_create(
+        title=DEFAULT_ATTENDANCE_REQUEST_BATCH
+    )
+    return {
+        "shifts": shifts,
+        "work_types": work_types,
+        "batch": batch,
+    }
+
+
+def normalize_attendance_request_payload(data, request_user=None):
+    refs = ensure_default_attendance_request_references()
+
+    payload = data.copy()
+    if hasattr(payload, "_mutable"):
+        payload._mutable = True
+
+    employee_value = payload.get("employee_id")
+    employee = None
+    employee_pk = str(employee_value).strip().isdigit() if employee_value else False
+    if employee_value:
+        if employee_pk:
+            employee = Employee.objects.filter(pk=employee_value).first()
+            if employee is None:
+                employee = Employee.objects.filter(employee_user_id=employee_value).first()
+        else:
+            employee = Employee.objects.filter(employee_user_id=employee_value).first()
+    if employee is None and request_user is not None:
+        employee = getattr(request_user, "employee_get", None)
+    if employee is not None:
+        payload["employee_id"] = employee.id
+
+    shift_value = payload.get("shift_id")
+    shift_pk = str(shift_value).strip().isdigit() if shift_value else False
+    if shift_value and not shift_pk:
+        shift = EmployeeShift.objects.filter(employee_shift__iexact=shift_value).first()
+        if shift:
+            payload["shift_id"] = shift.id
+
+    work_type_value = payload.get("work_type_id")
+    work_type_pk = str(work_type_value).strip().isdigit() if work_type_value else False
+    if work_type_value and not work_type_pk:
+        work_type = WorkType.objects.filter(work_type__iexact=work_type_value).first()
+        if work_type:
+            payload["work_type_id"] = work_type.id
+
+    batch_value = payload.get("batch_attendance_id")
+    if batch_value in {"dynamic_create", "Dynamic Create"}:
+        payload["batch_attendance_id"] = refs["batch"].id
+    elif batch_value and not str(batch_value).strip().isdigit():
+        batch = BatchAttendance.objects.filter(title__iexact=batch_value).first()
+        if batch:
+            payload["batch_attendance_id"] = batch.id
+
+    return payload
 
 
 def _should_auto_validate_attendance(attendance=None, activity=None):
@@ -656,6 +767,14 @@ class AttendanceView(APIView):
     permission_classes = [IsAuthenticated]
     filterset_class = AttendanceFilters
 
+    def _apply_validated_filter(self, queryset, validated_param):
+        validated_param = str(validated_param).strip().lower()
+        if validated_param == "false":
+            return queryset.filter(attendance_validated=False)
+        if validated_param == "true":
+            return queryset.filter(attendance_validated=True)
+        return queryset
+
     def get_queryset(self, request=None, type=None):
         # Handle schema generation for DRF-YASG
         if getattr(self, "swagger_fake_view", False) or request is None:
@@ -666,18 +785,21 @@ class AttendanceView(APIView):
             minot = strtime_seconds("00:30")
             if condition is not None:
                 minot = strtime_seconds(condition.minimum_overtime_to_approve)
-                queryset = Attendance.objects.filter(
+                queryset = Attendance.objects.entire().filter(
                     overtime_second__gte=minot,
                     attendance_validated=True,
                 )
 
         elif type == "validated":
-            queryset = Attendance.objects.filter(attendance_validated=True)
+            queryset = Attendance.objects.entire().filter(attendance_validated=True)
         elif type == "non-validated":
-            queryset = Attendance.objects.filter(attendance_validated=False)
+            queryset = Attendance.objects.entire().filter(attendance_validated=False)
         else:
-            queryset = Attendance.objects.all()
+            queryset = Attendance.objects.entire()
         user = request.user
+        if has_full_attendance_access(user):
+            return queryset
+
         # checking user level permissions
         perm = "attendance.view_attendance"
         queryset = permission_based_queryset(user, perm, queryset, user_obj=True)
@@ -727,14 +849,9 @@ class AttendanceView(APIView):
         ).qs
 
         validated_param = request.GET.get("validated")
-        if validated_param == "false":
-            attendances_filter_queryset = attendances_filter_queryset.filter(
-                attendance_validated=False
-            )
-        elif validated_param == "true":
-            attendances_filter_queryset = attendances_filter_queryset.filter(
-                attendance_validated=True
-            )
+        attendances_filter_queryset = self._apply_validated_filter(
+            attendances_filter_queryset, validated_param
+        )
 
         field_name = request.GET.get("groupby_field")
         if field_name:
@@ -1073,8 +1190,12 @@ class ValidateAttendanceView(APIView):
         tags=["Attendance"],
     )
     def put(self, request, pk):
-        attendance = Attendance.objects.filter(id=pk).update(attendance_validated=True)
         attendance = Attendance.objects.filter(id=pk).first()
+        if not attendance:
+            return Response({"error": "Attendance record not found."}, status=404)
+        if not attendance.attendance_validated:
+            attendance.attendance_validated = True
+            attendance.save()
         try:
             notify.send(
                 request.user.employee_get,
@@ -1188,7 +1309,12 @@ class AttendanceRequestView(APIView):
     def post(self, request):
         from attendance.forms import NewRequestForm
 
-        form = NewRequestForm(data=request.data)
+        normalized_data = normalize_attendance_request_payload(
+            request.data, request.user
+        )
+        form = NewRequestForm(data=normalized_data)
+        if "employee_id" in form.fields:
+            form.fields["employee_id"].queryset = Employee.objects.entire()
         if form.is_valid():
             work_type = form.cleaned_data.get("work_type_id")
 
@@ -1199,8 +1325,8 @@ class AttendanceRequestView(APIView):
                 form.new_instance.save()
 
             return Response(form.data, status=200)
-        employee_id = request.data.get("employee_id")
-        attendance_date = request.data.get("attendance_date", date.today())
+        employee_id = normalized_data.get("employee_id")
+        attendance_date = normalized_data.get("attendance_date", date.today())
         if Attendance.objects.filter(
             employee_id=employee_id, attendance_date=attendance_date
         ).exists():
@@ -1208,13 +1334,16 @@ class AttendanceRequestView(APIView):
                 {error: list(message) for error, message in form.errors.items()},
                 status=400,
             )
-        return Response(form.errors, status=404)
+        return Response(form.errors, status=400)
 
     def put(self, request, pk):
         from attendance.forms import AttendanceRequestForm
 
         attendance = Attendance.objects.get(id=pk)
-        form = AttendanceRequestForm(data=request.data, instance=attendance)
+        normalized_data = normalize_attendance_request_payload(
+            request.data, request.user
+        )
+        form = AttendanceRequestForm(data=normalized_data, instance=attendance)
         if form.is_valid():
             attendance = Attendance.objects.get(id=form.instance.pk)
             instance = form.save()
@@ -1235,7 +1364,7 @@ class AttendanceRequestView(APIView):
                 instance.is_validate_request = True
                 instance.save()
             return Response(form.data, status=200)
-        return Response(form.errors, status=404)
+        return Response(form.errors, status=400)
 
 
 class AttendanceRequestApproveView(APIView):
@@ -1437,17 +1566,12 @@ class AttendanceActivityView(APIView):
 
     def get(self, request, pk=None):
         user = request.user
-
-        # If user is admin/staff, show all records
-        if user.is_staff or user.is_superuser:
-            queryset = AttendanceActivity.objects.all()
+        if has_full_attendance_access(user):
+            queryset = AttendanceActivity.objects.entire()
         else:
-            # Otherwise, show only records for the employee
-            employee_id = getattr(user, "employee_get", None)
-            if employee_id:
-                queryset = AttendanceActivity.objects.filter(employee_id=employee_id.id)
-            else:
-                queryset = AttendanceActivity.objects.none()
+            queryset = AttendanceActivity.objects.entire().filter(
+                employee_id__employee_user_id=user
+            )
         serializer = AttendanceActivitySerializer(queryset, many=True)
         return Response(serializer.data, status=200)
 
@@ -1820,10 +1944,10 @@ class AttendanceTypeAccessCheck(APIView):
 
     def get(self, request):
         user = request.user
-        employee_id = user.employee_get.id
-
-        if user.has_perm("attendance.view_attendance"):
+        if has_full_attendance_access(user):
             return Response(status=200)
+
+        employee_id = user.employee_get.id
 
         is_manager = (
             EmployeeWorkInformation.objects.filter(reporting_manager_id=employee_id)
@@ -1870,22 +1994,22 @@ class AttendanceWorkRecordsAPIView(APIView):
         attendance_qs = Attendance.objects.entire().select_related(
             "employee_id", "shift_id"
         ).filter(attendance_clock_in__isnull=False)
-        accessible_employees = filtersubordinatesemployeemodel(
-            request,
-            EmployeeFilter(request.GET or None).qs,
-            "attendance.view_attendance",
-        )
-        request_employee = getattr(user, "employee_get", None)
-        accessible_employees = list(accessible_employees)
-        if request_employee is not None:
-            accessible_employees = list(
-                dict.fromkeys([request_employee, *accessible_employees])
-            )
-        else:
-            accessible_employees = list(dict.fromkeys(accessible_employees))
-        if accessible_employees:
-            qs = qs.filter(employee_id__in=accessible_employees)
-            attendance_qs = attendance_qs.filter(employee_id__in=accessible_employees)
+        if not has_full_attendance_access(user):
+            request_employee = getattr(user, "employee_get", None)
+            if request_employee is None:
+                qs = qs.none()
+                attendance_qs = attendance_qs.none()
+            else:
+                accessible_employees = filtersubordinatesemployeemodel(
+                    request,
+                    EmployeeFilter(request.GET or None).qs,
+                    "attendance.view_attendance",
+                )
+                accessible_employees = list(
+                    dict.fromkeys([request_employee, *list(accessible_employees)])
+                )
+                qs = qs.filter(employee_id__in=accessible_employees)
+                attendance_qs = attendance_qs.filter(employee_id__in=accessible_employees)
         month = request.GET.get("month")
         employee_id = request.GET.get("employee_id")
         if employee_id:

@@ -6,6 +6,7 @@ This module is used to register models for employee app
 """
 
 import logging
+import re
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 
@@ -50,6 +51,54 @@ ADMIN_USER_GROUP_NAME = "Admin User"
 EMPLOYEE_USER_GROUP_NAME = "Employee User"
 
 
+def get_next_employee_badge_id():
+    """
+    Generate the next badge id using the configured prefix.
+    """
+    from base.context_processors import get_initial_prefix
+    from base.methods import eval_validate
+    from employee.methods.methods import get_ordered_badge_ids
+
+    prefix = get_initial_prefix(None)["get_initial_prefix"]
+    data = get_ordered_badge_ids()
+    result = []
+    try:
+        for sublist in data:
+            for item in sublist:
+                if isinstance(item, str) and item.lower().startswith(prefix.lower()):
+                    index = sublist.index(item)
+                    if index + 1 < len(sublist):
+                        result = sublist[index + 1]
+                        result = re.findall(r"[a-zA-Z]+|\d+|[^a-zA-Z\d\s]", result)
+
+        if result:
+            prefix_parts = []
+            incremented = False
+            for item in reversed(result):
+                total_letters = len(item)
+                total_zero_leads = 0
+                for letter in item:
+                    if letter == "0":
+                        total_zero_leads += 1
+                        continue
+                    break
+
+                if total_zero_leads:
+                    item = item[total_zero_leads:]
+                if isinstance(item, list):
+                    item = item[-1]
+                if not incremented and isinstance(eval_validate(str(item)), int):
+                    item = int(item) + 1
+                    incremented = True
+                if isinstance(item, int):
+                    item = "{:0{}d}".format(item, total_letters)
+                prefix_parts.insert(0, str(item))
+            prefix = "".join(prefix_parts)
+    except Exception:
+        prefix = get_initial_prefix(None)["get_initial_prefix"]
+    return prefix
+
+
 def reporting_manager_validator(value):
     """
     Method to implement reporting manager_validator
@@ -71,6 +120,8 @@ def is_admin_user(user, employee=None):
     Decide whether a user belongs to the managed admin group.
     """
     if user.is_superuser or user.is_staff:
+        return True
+    if user.groups.filter(name=ADMIN_USER_GROUP_NAME).exists():
         return True
     if employee is None:
         employee = getattr(user, "employee_get", None)
@@ -611,6 +662,14 @@ class Employee(models.Model):
                 )
 
     def save(self, *args, **kwargs):
+<<<<<<< HEAD
+=======
+        if not self.badge_id:
+            self.badge_id = get_next_employee_badge_id()
+        self.full_clean()
+        
+        # Check if the associated user is a superuser and set role to admin
+>>>>>>> 4593e5a (Removed LinkedIn secret)
         if self.employee_user_id and self.employee_user_id.is_superuser:
             self.role = "admin"
         self.full_clean()
@@ -1067,6 +1126,7 @@ def set_superuser_role_to_admin(sender, instance, created, **kwargs):
             employee, created_emp = Employee.objects.get_or_create(
                 employee_user_id=instance,
                 defaults={
+                    "badge_id": get_next_employee_badge_id(),
                     "employee_first_name": instance.first_name or instance.username,
                     "employee_last_name": instance.last_name or "",
                     "email": instance.email or f"{instance.username}@example.com",
@@ -1074,11 +1134,15 @@ def set_superuser_role_to_admin(sender, instance, created, **kwargs):
                     "role": "admin",  # Set role to admin for superuser
                 },
             )
-            # If employee already exists but doesn't have admin role, update it
+            updates = {}
+            if not employee.badge_id:
+                updates["badge_id"] = get_next_employee_badge_id()
+                employee.badge_id = updates["badge_id"]
             if not created_emp and employee.role != "admin":
-                # Update directly to avoid signal recursion
-                Employee.objects.filter(pk=employee.pk).update(role="admin")
+                updates["role"] = "admin"
                 employee.role = "admin"
+            if updates:
+                Employee.objects.filter(pk=employee.pk).update(**updates)
         except Exception as e:
             # Log the error but don't crash
             logger.error(

@@ -917,6 +917,7 @@ $("#validateAttendances").click(function (e) {
                         },
                         success: function (response, textStatus, jqXHR) {
                             if (jqXHR.status === 200) {
+                                localStorage.setItem("activeTabAttendance", "#tab_2");
                                 location.reload();
                             } else {
                             }

@@ -2,7 +2,7 @@ from datetime import datetime, timezone as dt_timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.contrib.auth.models import Permission, User
+from django.contrib.auth.models import Group, Permission, User
 from django.db.models import Q
 from django.test import TestCase
 from django.utils import timezone
@@ -51,6 +51,8 @@ class AttendanceClockVisibilityAPITest(TestCase):
     def tearDown(self):
         if hasattr(WorkRecords, "company_filter"):
             delattr(WorkRecords, "company_filter")
+        if hasattr(AttendanceActivity, "company_filter"):
+            delattr(AttendanceActivity, "company_filter")
         if hasattr(_thread_locals, "request"):
             delattr(_thread_locals, "request")
 
@@ -295,12 +297,283 @@ class AttendanceClockVisibilityAPITest(TestCase):
         assert self.employee.id not in validated_ids
         assert admin_employee.id not in validated_ids
 
-    def test_permission_based_admin_can_see_accessible_work_records(self):
+    def test_on_time_clock_ins_stay_visible_in_validated_attendance_list(self):
+        attendance_date = timezone.localdate()
         admin_user = User.objects.create_user(
-            username="attendance_admin", password="password"
+            username="attendance_admin_ontime", password="password"
+        )
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Admin",
+            employee_last_name="OnTime",
+            email="admin.ontime@example.com",
+            phone="9999999985",
+            role="admin",
+        )
+
+        self.client.force_authenticate(user=self.user)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(10, 15, attendance_date),
+        ):
+            employee_clock_in = self.client.post(
+                "/api/attendance/clock-in/", format="json"
+            )
+        assert employee_clock_in.status_code == 200
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(18, 0, attendance_date),
+        ):
+            employee_clock_out = self.client.post(
+                "/api/attendance/clock-out/", format="json"
+            )
+        assert employee_clock_out.status_code == 200
+
+        self.client.force_authenticate(user=admin_user)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(10, 30, attendance_date),
+        ):
+            admin_clock_in = self.client.post("/api/attendance/clock-in/", format="json")
+        assert admin_clock_in.status_code == 200
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(18, 15, attendance_date),
+        ):
+            admin_clock_out = self.client.post(
+                "/api/attendance/clock-out/", format="json"
+            )
+        assert admin_clock_out.status_code == 200
+
+        validated_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "true",
+            },
+            format="json",
+        )
+        assert validated_response.status_code == 200
+        validated_ids = {
+            row["employee_id"] for row in validated_response.json()["results"]
+        }
+        assert self.employee.id in validated_ids
+        assert admin_employee.id in validated_ids
+
+        non_validated_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "false",
+            },
+            format="json",
+        )
+        assert non_validated_response.status_code == 200
+        non_validated_ids = {
+            row["employee_id"] for row in non_validated_response.json()["results"]
+        }
+        assert self.employee.id not in non_validated_ids
+        assert admin_employee.id not in non_validated_ids
+
+    def test_patch_validate_moves_attendance_between_validated_lists(self):
+        attendance_date = timezone.localdate()
+
+        self.client.force_authenticate(user=self.user)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(11, 0, attendance_date),
+        ):
+            clock_in_response = self.client.post(
+                "/api/attendance/clock-in/", format="json"
+            )
+        assert clock_in_response.status_code == 200
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(19, 0, attendance_date),
+        ):
+            clock_out_response = self.client.post(
+                "/api/attendance/clock-out/", format="json"
+            )
+        assert clock_out_response.status_code == 200
+
+        attendance = Attendance.objects.get(
+            employee_id=self.employee, attendance_date=attendance_date
+        )
+        assert attendance.attendance_validated is False
+
+        before_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "false",
+            },
+            format="json",
+        )
+        assert before_response.status_code == 200
+        before_ids = {row["id"] for row in before_response.json()["results"]}
+        assert attendance.id in before_ids
+
+        validate_response = self.client.patch(
+            f"/api/attendance/attendance-validate/{attendance.id}",
+            format="json",
+        )
+        assert validate_response.status_code == 200
+
+        attendance.refresh_from_db()
+        assert attendance.attendance_validated is True
+
+        validated_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "true",
+            },
+            format="json",
+        )
+        assert validated_response.status_code == 200
+        validated_ids = {row["id"] for row in validated_response.json()["results"]}
+        assert attendance.id in validated_ids
+
+        non_validated_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "false",
+            },
+            format="json",
+        )
+        assert non_validated_response.status_code == 200
+        non_validated_ids = {
+            row["id"] for row in non_validated_response.json()["results"]
+        }
+        assert attendance.id not in non_validated_ids
+
+    def test_bulk_patch_validate_moves_attendances_between_validated_lists(self):
+        attendance_date = timezone.localdate()
+        admin_user = User.objects.create_user(
+            username="attendance_bulk_admin", password="password"
         )
         admin_user.user_permissions.add(
             Permission.objects.get(codename="view_attendance")
+        )
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Admin",
+            employee_last_name="Bulk",
+            email="admin.bulk@example.com",
+            phone="9999999975",
+        )
+
+        second_user = User.objects.create_user(
+            username="attendance_bulk_target", password="password"
+        )
+        second_employee = Employee.objects.create(
+            employee_user_id=second_user,
+            employee_first_name="Riya",
+            employee_last_name="Bulk",
+            email="riya.bulk@example.com",
+            phone="9999999974",
+        )
+
+        self.client.force_authenticate(user=self.user)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(11, 5, attendance_date),
+        ):
+            self.client.post("/api/attendance/clock-in/", format="json")
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(19, 5, attendance_date),
+        ):
+            self.client.post("/api/attendance/clock-out/", format="json")
+
+        self.client.force_authenticate(user=second_user)
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(11, 10, attendance_date),
+        ):
+            self.client.post("/api/attendance/clock-in/", format="json")
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(19, 10, attendance_date),
+        ):
+            self.client.post("/api/attendance/clock-out/", format="json")
+
+        attendance_ids = list(
+            Attendance.objects.filter(
+                employee_id__in=[self.employee, second_employee],
+                attendance_date=attendance_date,
+            ).values_list("id", flat=True)
+        )
+        assert len(attendance_ids) == 2
+        assert (
+            Attendance.objects.filter(
+                id__in=attendance_ids, attendance_validated=False
+            ).count()
+            == 2
+        )
+
+        self.client.force_authenticate(user=admin_user)
+
+        before_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "false",
+            },
+            format="json",
+        )
+        assert before_response.status_code == 200
+        before_ids = {row["id"] for row in before_response.json()["results"]}
+        assert set(attendance_ids).issubset(before_ids)
+
+        bulk_validate_response = self.client.patch(
+            "/api/attendance/attendance/bulk-validate/",
+            {"ids": attendance_ids},
+            format="json",
+        )
+        assert bulk_validate_response.status_code == 200
+        assert bulk_validate_response.json()["validated"] == 2
+
+        assert (
+            Attendance.objects.filter(
+                id__in=attendance_ids, attendance_validated=True
+            ).count()
+            == 2
+        )
+
+        validated_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "true",
+            },
+            format="json",
+        )
+        assert validated_response.status_code == 200
+        validated_ids = {row["id"] for row in validated_response.json()["results"]}
+        assert set(attendance_ids).issubset(validated_ids)
+        assert admin_employee.id not in {
+            row["employee_id"] for row in validated_response.json()["results"]
+        }
+
+        non_validated_response = self.client.get(
+            "/api/attendance/attendance/",
+            {
+                "attendance_date": attendance_date.strftime("%Y-%m-%d"),
+                "validated": "false",
+            },
+            format="json",
+        )
+        assert non_validated_response.status_code == 200
+        non_validated_ids = {
+            row["id"] for row in non_validated_response.json()["results"]
+        }
+        assert set(attendance_ids).isdisjoint(non_validated_ids)
+
+    def test_permission_based_admin_can_see_accessible_work_records(self):
+        admin_user = User.objects.create_user(
+            username="attendance_admin", password="password"
         )
         Employee.objects.create(
             employee_user_id=admin_user,
@@ -308,6 +581,7 @@ class AttendanceClockVisibilityAPITest(TestCase):
             employee_last_name="Viewer",
             email="admin.viewer@example.com",
             phone="9999999997",
+            role="admin",
         )
 
         other_user = User.objects.create_user(
@@ -345,6 +619,252 @@ class AttendanceClockVisibilityAPITest(TestCase):
             for row in response.json()
         )
 
+<<<<<<< HEAD
+=======
+    def test_permission_based_admin_can_see_employee_attendance_activities(self):
+        activity_date = timezone.localdate()
+        admin_user = User.objects.create_user(
+            username="attendance_activity_admin", password="password"
+        )
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Admin",
+            employee_last_name="Activity",
+            email="admin.activity@example.com",
+            phone="9999999994",
+            role="admin",
+        )
+
+        other_user = User.objects.create_user(
+            username="attendance_activity_other", password="password"
+        )
+        other_employee = Employee.objects.create(
+            employee_user_id=other_user,
+            employee_first_name="Visible",
+            employee_last_name="Activity",
+            email="visible.activity@example.com",
+            phone="9999999993",
+        )
+
+        AttendanceActivity.objects.create(
+            employee_id=admin_employee,
+            attendance_date=activity_date,
+            clock_in_date=activity_date,
+            clock_in=datetime.strptime("09:00", "%H:%M").time(),
+        )
+        AttendanceActivity.objects.create(
+            employee_id=other_employee,
+            attendance_date=activity_date,
+            clock_in_date=activity_date,
+            clock_in=datetime.strptime("10:00", "%H:%M").time(),
+        )
+
+        self.client.force_authenticate(user=admin_user)
+        response = self.client.get(
+            "/api/attendance/attendance-activity/",
+            format="json",
+        )
+
+        assert response.status_code == 200
+        visible_employee_ids = {row["employee_id"] for row in response.json()}
+        assert admin_employee.id in visible_employee_ids
+        assert other_employee.id in visible_employee_ids
+
+    def test_superuser_can_see_all_employee_attendance_data(self):
+        activity_date = timezone.localdate()
+        superuser = User.objects.create_superuser(
+            username="attendance_superuser",
+            password="password",
+            email="attendance_superuser@example.com",
+        )
+
+        other_user = User.objects.create_user(
+            username="attendance_superuser_other", password="password"
+        )
+        other_employee = Employee.objects.create(
+            employee_user_id=other_user,
+            employee_first_name="Visible",
+            employee_last_name="Superuser",
+            email="visible.superuser@example.com",
+            phone="9999999991",
+        )
+
+        attendance = Attendance.objects.create(
+            employee_id=other_employee,
+            attendance_date=activity_date,
+            attendance_clock_in=timezone.localtime().time().replace(microsecond=0),
+            attendance_clock_in_date=activity_date,
+            attendance_validated=True,
+            minimum_hour="00:00",
+        )
+        sync_work_record_from_attendance(attendance)
+        AttendanceActivity.objects.create(
+            employee_id=other_employee,
+            attendance_date=activity_date,
+            clock_in_date=activity_date,
+            clock_in=datetime.strptime("10:00", "%H:%M").time(),
+        )
+
+        self.client.force_authenticate(user=superuser)
+        work_record_response = self.client.get(
+            "/api/attendance/attendance/work-records/",
+            {"month": activity_date.strftime("%Y-%m")},
+            format="json",
+        )
+        activity_response = self.client.get(
+            "/api/attendance/attendance-activity/",
+            format="json",
+        )
+
+        assert work_record_response.status_code == 200
+        assert activity_response.status_code == 200
+        assert any(
+            row["employee_id"] == other_employee.id for row in work_record_response.json()
+        )
+        assert any(
+            row["employee_id"] == other_employee.id for row in activity_response.json()
+        )
+
+    def test_admin_group_user_can_see_all_employee_attendance_activities(self):
+        activity_date = timezone.localdate()
+        admin_group, _ = Group.objects.get_or_create(name="Admin User")
+        admin_user = User.objects.create_user(
+            username="attendance_group_admin", password="password"
+        )
+        admin_user.groups.add(admin_group)
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Group",
+            employee_last_name="Admin",
+            email="group.admin@example.com",
+            phone="9999999990",
+        )
+
+        other_user = User.objects.create_user(
+            username="attendance_group_other", password="password"
+        )
+        other_employee = Employee.objects.create(
+            employee_user_id=other_user,
+            employee_first_name="Visible",
+            employee_last_name="Group",
+            email="visible.group@example.com",
+            phone="9999999989",
+        )
+
+        AttendanceActivity.objects.create(
+            employee_id=admin_employee,
+            attendance_date=activity_date,
+            clock_in_date=activity_date,
+            clock_in=datetime.strptime("09:00", "%H:%M").time(),
+        )
+        AttendanceActivity.objects.create(
+            employee_id=other_employee,
+            attendance_date=activity_date,
+            clock_in_date=activity_date,
+            clock_in=datetime.strptime("10:00", "%H:%M").time(),
+        )
+
+        self.client.force_authenticate(user=admin_user)
+        response = self.client.get(
+            "/api/attendance/attendance-activity/",
+            format="json",
+        )
+
+        assert response.status_code == 200
+        visible_employee_ids = {row["employee_id"] for row in response.json()}
+        assert admin_employee.id in visible_employee_ids
+        assert other_employee.id in visible_employee_ids
+
+    def test_admin_can_see_all_attendance_activities_despite_company_filter(self):
+        activity_date = timezone.localdate()
+        admin_user = User.objects.create_user(
+            username="attendance_company_admin", password="password"
+        )
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Company",
+            employee_last_name="Admin",
+            email="company.admin@example.com",
+            phone="9999999987",
+            role="admin",
+        )
+
+        other_user = User.objects.create_user(
+            username="attendance_company_other", password="password"
+        )
+        other_employee = Employee.objects.create(
+            employee_user_id=other_user,
+            employee_first_name="Visible",
+            employee_last_name="Company",
+            email="visible.company@example.com",
+            phone="9999999986",
+        )
+
+        AttendanceActivity.objects.create(
+            employee_id=admin_employee,
+            attendance_date=activity_date,
+            clock_in_date=activity_date,
+            clock_in=datetime.strptime("09:00", "%H:%M").time(),
+        )
+        AttendanceActivity.objects.create(
+            employee_id=other_employee,
+            attendance_date=activity_date,
+            clock_in_date=activity_date,
+            clock_in=datetime.strptime("10:00", "%H:%M").time(),
+        )
+
+        AttendanceActivity.company_filter = Q(employee_id__id=-1)
+        _thread_locals.request = SimpleNamespace(session={"selected_company": "1"})
+
+        self.client.force_authenticate(user=admin_user)
+        response = self.client.get(
+            "/api/attendance/attendance-activity/",
+            format="json",
+        )
+
+        assert response.status_code == 200
+        visible_employee_ids = {row["employee_id"] for row in response.json()}
+        assert admin_employee.id in visible_employee_ids
+        assert other_employee.id in visible_employee_ids
+
+    def test_employee_only_sees_own_attendance_activities(self):
+        activity_date = timezone.localdate()
+        other_user = User.objects.create_user(
+            username="attendance_activity_peer", password="password"
+        )
+        other_employee = Employee.objects.create(
+            employee_user_id=other_user,
+            employee_first_name="Peer",
+            employee_last_name="Activity",
+            email="peer.activity@example.com",
+            phone="9999999992",
+        )
+
+        AttendanceActivity.objects.create(
+            employee_id=self.employee,
+            attendance_date=activity_date,
+            clock_in_date=activity_date,
+            clock_in=datetime.strptime("09:00", "%H:%M").time(),
+        )
+        AttendanceActivity.objects.create(
+            employee_id=other_employee,
+            attendance_date=activity_date,
+            clock_in_date=activity_date,
+            clock_in=datetime.strptime("10:00", "%H:%M").time(),
+        )
+
+        self.client.force_authenticate(user=self.user)
+        response = self.client.get(
+            "/api/attendance/attendance-activity/",
+            format="json",
+        )
+
+        assert response.status_code == 200
+        visible_employee_ids = {row["employee_id"] for row in response.json()}
+        assert self.employee.id in visible_employee_ids
+        assert other_employee.id not in visible_employee_ids
+
+>>>>>>> 4593e5a (Removed LinkedIn secret)
     def test_negative_utc_local_activity_does_not_return_negative_at_work(self):
         attendance_date = timezone.localdate()
         attendance = Attendance.objects.create(
