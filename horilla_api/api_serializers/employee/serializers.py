@@ -384,29 +384,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     #     return employee
     def create(self, validated_data):
-<<<<<<< HEAD
-        username = validated_data.pop("username", None)
-        secret_field = "pass" "word"
-        user_secret = validated_data.pop(secret_field, None)
-        role = validated_data.get("role", "user")
-    
-        validated_data["badge_id"] = get_next_badge_id()
-        user = None
-    
         with transaction.atomic():
-            if username:
-                if User.objects.filter(username__iexact=username).exists():
-                    raise serializers.ValidationError(
-                        {"username": f"Username '{username}' already exists."}
-                    )
-    
-                if not user_secret:
-                    user_secret = secrets.token_urlsafe(12)
-    
-                user = User.objects.create_user(
-=======
-        with transaction.atomic():
-            # Extract username and password from validated data
             username = validated_data.pop("username", None)
             secret_field = "pass" "word"
             user_secret = validated_data.pop(secret_field, None)
@@ -419,65 +397,31 @@ class EmployeeSerializer(serializers.ModelSerializer):
             user = None
             employee = None
             if username:
-                if User.objects.filter(username=username).exists():
+                if User.objects.filter(username__iexact=username).exists():
                     raise serializers.ValidationError(
-                        f"Username '{username}' already exists. Please choose a different username."
+                        {"username": f"Username '{username}' already exists."}
                     )
 
                 if not user_secret:
                     user_secret = secrets.token_urlsafe(12)
 
                 create_user_kwargs = dict(
->>>>>>> 4593e5a (Removed LinkedIn secret)
                     username=username,
                     email=validated_data.get("email"),
                     first_name=validated_data.get("employee_first_name", ""),
                     last_name=validated_data.get("employee_last_name", ""),
-<<<<<<< HEAD
-                    password=user_secret,
-                )
-    
-                is_admin = role == "admin"
-    
-                User.objects.filter(pk=user.pk).update(
-                    is_superuser=is_admin,
-                    is_staff=is_admin,
-                )
-                user.refresh_from_db()
-    
-                validated_data["employee_user_id"] = user
-    
-            existing_employee = None
-            if user is not None:
-                existing_employee = Employee.objects.filter(employee_user_id=user).first()
-    
-            if existing_employee is None and validated_data.get("email"):
-                existing_employee = Employee.objects.filter(
-                    email=validated_data["email"]
-                ).first()
-    
-            if existing_employee is not None:
-                for attr, value in validated_data.items():
-                    setattr(existing_employee, attr, value)
-                existing_employee.save()
-                employee = existing_employee
-            else:
-                employee = super().create(validated_data)
-    
-=======
                     **{secret_field: user_secret},
                 )
                 user = User.objects.create_user(**create_user_kwargs)
-                if role == "admin":
-                    user.is_superuser = True
-                    user.is_staff = True
-                else:
-                    user.is_superuser = False
-                    user.is_staff = False
+                is_admin = role == "admin"
+                user.is_superuser = is_admin
+                user.is_staff = is_admin
                 user.save()
                 validated_data["employee_user_id"] = user
 
-                auto_created_employee = Employee.objects.filter(employee_user_id=user).first()
+                auto_created_employee = Employee.objects.filter(
+                    employee_user_id=user
+                ).first()
                 if auto_created_employee is not None:
                     for field, value in validated_data.items():
                         if (
@@ -490,11 +434,24 @@ class EmployeeSerializer(serializers.ModelSerializer):
                     auto_created_employee.save()
                     employee = auto_created_employee
 
+            if employee is None and validated_data.get("email"):
+                existing_employee = Employee.objects.filter(
+                    email=validated_data["email"]
+                ).first()
+                if existing_employee is not None:
+                    for field, value in validated_data.items():
+                        if (
+                            field == "badge_id"
+                            and not badge_provided
+                            and existing_employee.badge_id
+                        ):
+                            continue
+                        setattr(existing_employee, field, value)
+                    existing_employee.save()
+                    employee = existing_employee
+
             if employee is None:
                 employee = super().create(validated_data)
-
-        # Send welcome email with credentials
->>>>>>> 4593e5a (Removed LinkedIn secret)
         if user and employee.email:
             employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
             self._send_welcome_email(

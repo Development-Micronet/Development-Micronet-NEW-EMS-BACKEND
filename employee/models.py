@@ -662,14 +662,8 @@ class Employee(models.Model):
                 )
 
     def save(self, *args, **kwargs):
-<<<<<<< HEAD
-=======
         if not self.badge_id:
             self.badge_id = get_next_employee_badge_id()
-        self.full_clean()
-        
-        # Check if the associated user is a superuser and set role to admin
->>>>>>> 4593e5a (Removed LinkedIn secret)
         if self.employee_user_id and self.employee_user_id.is_superuser:
             self.role = "admin"
         self.full_clean()

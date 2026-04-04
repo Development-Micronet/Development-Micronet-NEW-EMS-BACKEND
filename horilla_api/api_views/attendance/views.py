@@ -260,16 +260,12 @@ class OnBreakEmployeesAPIView(APIView):
         return Response({"on_break_employees": data, "count": len(data)}, status=200)
 
 
-<<<<<<< HEAD
-from attendance.models import Attendance, AttendanceActivity, EmployeeShiftDay
-=======
 from attendance.models import (
     Attendance,
     AttendanceActivity,
     BatchAttendance,
     EmployeeShiftDay,
 )
->>>>>>> 4593e5a (Removed LinkedIn secret)
 from attendance.methods.utils import format_time, strtime_seconds
 from attendance.views.clock_in_out import *
 from attendance.signals import (

@@ -619,8 +619,6 @@ class AttendanceClockVisibilityAPITest(TestCase):
             for row in response.json()
         )
 
-<<<<<<< HEAD
-=======
     def test_permission_based_admin_can_see_employee_attendance_activities(self):
         activity_date = timezone.localdate()
         admin_user = User.objects.create_user(
@@ -863,8 +861,6 @@ class AttendanceClockVisibilityAPITest(TestCase):
         visible_employee_ids = {row["employee_id"] for row in response.json()}
         assert self.employee.id in visible_employee_ids
         assert other_employee.id not in visible_employee_ids
-
->>>>>>> 4593e5a (Removed LinkedIn secret)
     def test_negative_utc_local_activity_does_not_return_negative_at_work(self):
         attendance_date = timezone.localdate()
         attendance = Attendance.objects.create(

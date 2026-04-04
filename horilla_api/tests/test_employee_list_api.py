@@ -32,7 +32,6 @@ class EmployeeListAPITest(TestCase):
         assert data.get("count") == 3
         assert len(data.get("results", [])) == 3
 
-<<<<<<< HEAD
     def test_post_can_create_admin_employee_without_duplicate_employee_error(self):
         payload = {
             "username": "admin-creator",
@@ -54,7 +53,7 @@ class EmployeeListAPITest(TestCase):
         assert created_employee.employee_user_id is not None
         assert created_employee.employee_user_id.is_superuser is True
         assert Employee.objects.filter(employee_user_id=created_employee.employee_user_id).count() == 1
-=======
+
     def tearDown(self):
         BonusPoint.objects.all().delete()
 
@@ -110,4 +109,3 @@ class EmployeeAdminCreationAPITest(TestCase):
 
     def tearDown(self):
         BonusPoint.objects.all().delete()
->>>>>>> 4593e5a (Removed LinkedIn secret)
