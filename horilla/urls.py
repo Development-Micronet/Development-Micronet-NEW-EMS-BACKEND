@@ -23,6 +23,7 @@ from drf_yasg.views import get_schema_view
 from rest_framework import permissions
 
 from horilla_api.api_views.employee import views as employee_views
+from horilla_api.api_views.auth.views import ResetPasswordPageView
 from leave import views as leave_views
 
 from . import settings
@@ -63,6 +64,11 @@ urlpatterns = [
     path(
         "auth/", include("horilla_api.api_urls.auth.urls")
     ),  # Shortcut for authentication
+    path(
+        "auth/reset-password/<str:uid>/<str:token>/",
+        ResetPasswordPageView.as_view(),
+        name="auth-reset-password-page",
+    ),
     path(
         "employees/",
         employee_views.EmployeeListAPIView.as_view(),

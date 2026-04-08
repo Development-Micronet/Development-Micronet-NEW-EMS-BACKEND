@@ -193,6 +193,136 @@ class AttendanceClockVisibilityAPITest(TestCase):
         if hasattr(_thread_locals, "request"):
             delattr(_thread_locals, "request")
 
+    def test_multiple_same_day_clock_in_out_excludes_breaks_and_updates_status(self):
+        attendance_date = timezone.localdate()
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(9, 0, attendance_date),
+        ):
+            first_clock_in = self.client.post("/api/attendance/clock-in/", format="json")
+        assert first_clock_in.status_code == 200
+        assert first_clock_in.json()["status"] == "online"
+
+        online_response = self.client.get(
+            "/api/attendance/attendance/online-offline/",
+            format="json",
+        )
+        assert online_response.status_code == 200
+        online_status = next(
+            (
+                row
+                for row in online_response.json()["employees"]
+                if row["user_id"] == self.user.id
+            ),
+            None,
+        )
+        assert online_status is not None
+        assert online_status["status"] == "online"
+        assert online_status["is_online"] is True
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(12, 0, attendance_date),
+        ):
+            first_clock_out = self.client.post(
+                "/api/attendance/clock-out/",
+                format="json",
+            )
+        assert first_clock_out.status_code == 200
+        assert first_clock_out.json()["status"] == "offline"
+
+        attendance = Attendance.objects.get(
+            employee_id=self.employee,
+            attendance_date=attendance_date,
+        )
+        attendance.refresh_from_db()
+        assert attendance.attendance_worked_hour == "03:00:00"
+        assert attendance.attendance_clock_out.strftime("%H:%M") == "12:00"
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(13, 0, attendance_date),
+        ):
+            second_clock_in = self.client.post(
+                "/api/attendance/clock-in/",
+                format="json",
+            )
+        assert second_clock_in.status_code == 200
+        assert second_clock_in.json()["status"] == "online"
+
+        attendance.refresh_from_db()
+        assert attendance.attendance_clock_out is None
+
+        activities = list(
+            AttendanceActivity.objects.filter(
+                employee_id=self.employee,
+                attendance_date=attendance_date,
+            ).order_by("clock_in_date", "clock_in", "id")
+        )
+        assert len(activities) == 2
+        assert activities[0].clock_in.strftime("%H:%M") == "09:00"
+        assert activities[0].clock_out.strftime("%H:%M") == "12:00"
+        assert activities[1].clock_in.strftime("%H:%M") == "13:00"
+        assert activities[1].clock_out is None
+
+        online_response = self.client.get(
+            "/api/attendance/attendance/online-offline/",
+            format="json",
+        )
+        assert online_response.status_code == 200
+        online_status = next(
+            (
+                row
+                for row in online_response.json()["employees"]
+                if row["user_id"] == self.user.id
+            ),
+            None,
+        )
+        assert online_status is not None
+        assert online_status["status"] == "online"
+        assert online_status["is_online"] is True
+
+        with patch(
+            "django.utils.timezone.now",
+            return_value=self._aware_datetime(18, 0, attendance_date),
+        ):
+            second_clock_out = self.client.post(
+                "/api/attendance/clock-out/",
+                format="json",
+            )
+        assert second_clock_out.status_code == 200
+        assert second_clock_out.json()["status"] == "offline"
+
+        attendance.refresh_from_db()
+        activities = list(
+            AttendanceActivity.objects.filter(
+                employee_id=self.employee,
+                attendance_date=attendance_date,
+            ).order_by("clock_in_date", "clock_in", "id")
+        )
+        assert len(activities) == 2
+        assert activities[1].clock_out.strftime("%H:%M") == "18:00"
+        assert attendance.attendance_clock_out.strftime("%H:%M") == "18:00"
+        assert attendance.attendance_worked_hour == "08:00:00"
+
+        offline_response = self.client.get(
+            "/api/attendance/attendance/online-offline/",
+            format="json",
+        )
+        assert offline_response.status_code == 200
+        offline_status = next(
+            (
+                row
+                for row in offline_response.json()["employees"]
+                if row["user_id"] == self.user.id
+            ),
+            None,
+        )
+        assert offline_status is not None
+        assert offline_status["status"] == "offline"
+        assert offline_status["is_online"] is False
+
     def test_late_clock_ins_stay_visible_in_non_validated_attendance_list(self):
         attendance_date = timezone.localdate()
         admin_user = User.objects.create_user(

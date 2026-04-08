@@ -5,8 +5,9 @@ import sys
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMultiAlternatives
 from django.db import transaction
+from django.template.loader import render_to_string
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from django.utils import timezone
@@ -17,6 +18,7 @@ sys.path.insert(0, os.path.dirname(__file__) + "/../../..")
 
 from attendance.models import Attendance, AttendanceActivity
 from base.backends import ConfiguredEmailBackend
+from base.email import get_email_branding_context
 from base.models import (
     BrevoEmailConfiguration,
     Company,
@@ -452,6 +454,8 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
             if employee is None:
                 employee = super().create(validated_data)
+
+            EmployeeWorkInformation.objects.get_or_create(employee_id=employee)
         if user and employee.email:
             employee_name = f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip()
             self._send_welcome_email(
@@ -465,25 +469,17 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     def _send_welcome_email(self, employee_name, email, username, password):
         """Send onboarding email with username and password."""
-        subject = "Your Account Credentials - Employee Management System"
-        text_content = f"""Hello {employee_name},
-
-Welcome to the Employee Management System!
-
-Your account has been created with the following credentials:
-
-Username: {username}
-Password: {password}
-
-Best regards,
-HR Management Team"""
-        html_content = f"""
-        <p>Hello {employee_name},</p>
-        <p>Welcome to the Employee Management System!</p>
-        <p>Your account has been created with the following credentials:</p>
-        <p><b>Username:</b> {username}<br><b>Password:</b> {password}</p>
-        <p>Best regards,<br>HR Management Team</p>
-        """
+        subject = "Welcome to Ace Technologies - Your Account Credentials"
+        login_url = getattr(settings, "FRONTEND_APP_URL", "").strip() or None
+        email_context = {
+            **get_email_branding_context(),
+            "recipient_name": employee_name or "there",
+            "username": username,
+            "password": password,
+            "login_url": login_url,
+        }
+        text_content = render_to_string("emails/welcome_account.txt", email_context)
+        html_content = render_to_string("emails/welcome_account.html", email_context)
 
         # Try Brevo first (env config has priority, DB config as fallback)
         if BREVO_AVAILABLE:
@@ -524,13 +520,13 @@ HR Management Team"""
             from_email = getattr(
                 email_backend, "dynamic_from_email_with_display_name", None
             )
-            message = EmailMessage(
+            message = EmailMultiAlternatives(
                 subject=subject,
                 body=text_content,
                 from_email=from_email,
                 to=[email],
             )
-            message.content_subtype = "plain"
+            message.attach_alternative(html_content, "text/html")
             message.send(fail_silently=False)
             return True
         except Exception:

@@ -8,6 +8,7 @@ from django.utils.translation import gettext_lazy as _
 from base.forms import ModelForm
 from horilla.horilla_middlewares import _thread_locals
 
+from .methods import can_create_project_records, get_employee_from_user
 from .models import *
 
 
@@ -173,11 +174,14 @@ class TaskAllForm(ModelForm):
         )
 
         request = getattr(_thread_locals, "request", None)
-        employee = request.user.employee_get
+        employee = get_employee_from_user(request.user) if request else None
         if not self.instance.pk:
-            if request.user.is_superuser or request.user.has_perm("project.add_task"):
+            if request and (
+                can_create_project_records(request.user)
+                or request.user.has_perm("project.add_task")
+            ):
                 projects = Project.objects.all()
-            elif Project.objects.filter(managers=employee).exists():
+            elif employee and Project.objects.filter(managers=employee).exists():
                 projects = Project.objects.filter(managers=employee)
             else:
                 projects = Project.objects.none()
@@ -187,9 +191,9 @@ class TaskAllForm(ModelForm):
             task = self.instance
             if request.user.is_superuser:
                 projects = Project.objects.all()
-            elif employee in task.project.managers.all():
+            elif employee and employee in task.project.managers.all():
                 projects = Project.objects.filter(managers=employee)
-            elif employee in task.task_managers.all():
+            elif employee and employee in task.task_managers.all():
                 # Limit fields accessible to task managers
                 projects = Project.objects.filter(id=self.instance.project.id)
                 self.fields["project"].disabled = True
@@ -218,7 +222,7 @@ class TimeSheetForm(ModelForm):
     def __init__(self, *args, request=None, **kwargs):
         super(TimeSheetForm, self).__init__(*args, **kwargs)
         request = getattr(_thread_locals, "request", None)
-        employee = request.user.employee_get
+        employee = get_employee_from_user(request.user) if request else None
         hx_trigger_value = "change" if self.instance.id else "load,change"
         if not self.initial.get("project_id") == "dynamic_create":
             self.fields["project_id"].widget.attrs.update(
@@ -240,7 +244,10 @@ class TimeSheetForm(ModelForm):
             }
         )
 
-        if not request.user.has_perm("project.add_timesheet"):
+        if request and not self.instance.pk and can_create_project_records(request.user):
+            projects = Project.objects.all()
+            self.fields["project_id"].queryset = projects
+        elif request and not request.user.has_perm("project.add_timesheet"):
             projects = Project.objects.filter(
                 Q(managers=employee)
                 | Q(members=employee)

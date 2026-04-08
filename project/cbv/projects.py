@@ -29,6 +29,8 @@ from project.forms import ProjectForm
 from project.methods import (
     any_project_manager,
     any_project_member,
+    can_create_project_records,
+    get_employee_from_user,
     is_project_manager_or_super_user,
     you_dont_have_permission,
 )
@@ -135,7 +137,9 @@ class ProjectsNavView(HorillaNavView):
                           """,
             },
         ]
-        if self.request.user.has_perm("project.add_project"):
+        if can_create_project_records(self.request.user) or self.request.user.has_perm(
+            "project.add_project"
+        ):
             self.create_attrs = f"""
                                 onclick = "event.stopPropagation();"
                                 data-toggle="oh-modal-toggle"
@@ -283,12 +287,31 @@ class ProjectFormView(HorillaFormView):
     form_class = ProjectForm
     new_display_title = _("Create") + " " + model._meta.verbose_name
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        user = self.request.user
+    def dispatch(self, request, *args, **kwargs):
+        project_id = kwargs.get("pk")
+        employee = get_employee_from_user(request.user)
 
-        if not user.is_superuser and not user.has_perm("project.add_project"):
-            self.template_name = "decorator_404.html"
+        if project_id:
+            project = Project.objects.filter(pk=project_id).first()
+            has_access = bool(
+                request.user.is_superuser
+                or request.user.has_perm("project.change_project")
+                or (
+                    employee is not None
+                    and project is not None
+                    and employee in project.managers.all()
+                )
+            )
+        else:
+            has_access = bool(
+                can_create_project_records(request.user)
+                or request.user.has_perm("project.add_project")
+            )
+
+        if not has_access:
+            return you_dont_have_permission(request)
+
+        return super().dispatch(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

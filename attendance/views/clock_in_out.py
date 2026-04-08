@@ -115,6 +115,91 @@ def late_come(attendance, start_time, end_time, shift):
     return True
 
 
+def reset_working_employee_cache():
+    """
+    Clear the cached list of online employees for the current request.
+    """
+    request = getattr(_thread_locals, "request", None)
+    if request is not None and hasattr(request, "working_employees"):
+        request.working_employees = None
+
+
+def create_or_resume_attendance_session(
+    employee,
+    attendance_date,
+    clock_in_date,
+    shift_day,
+    clock_in_datetime,
+    shift=None,
+    minimum_hour="00:00",
+    mark_validated=True,
+):
+    """
+    Start a fresh same-day session without counting any gap after a previous
+    check-out as worked time.
+    """
+    activity_queryset = AttendanceActivity.objects.filter(
+        employee_id=employee,
+        attendance_date=attendance_date,
+        clock_out__isnull=True,
+    )
+    if clock_in_date is not None:
+        activity_queryset = activity_queryset.filter(clock_in_date=clock_in_date)
+    if shift_day is not None:
+        activity_queryset = activity_queryset.filter(shift_day=shift_day)
+
+    activity = activity_queryset.order_by("-in_datetime", "-id").first()
+    if activity is None:
+        activity = AttendanceActivity.objects.create(
+            employee_id=employee,
+            attendance_date=attendance_date,
+            clock_in_date=clock_in_date,
+            shift_day=shift_day,
+            clock_in=clock_in_datetime.time(),
+            in_datetime=clock_in_datetime,
+        )
+
+    attendance = Attendance.objects.filter(
+        employee_id=employee,
+        attendance_date=attendance_date,
+    ).first()
+    created = attendance is None
+
+    if created:
+        work_info = getattr(employee, "employee_work_info", None)
+        attendance = Attendance(
+            employee_id=employee,
+            shift_id=shift,
+            work_type_id=getattr(work_info, "work_type_id", None),
+            attendance_date=attendance_date,
+            attendance_day=shift_day,
+            attendance_clock_in=clock_in_datetime.time(),
+            attendance_clock_in_date=clock_in_date,
+            minimum_hour=minimum_hour or "00:00",
+            attendance_validated=mark_validated,
+        )
+    else:
+        if attendance.shift_id is None and shift is not None:
+            attendance.shift_id = shift
+        if attendance.work_type_id is None:
+            work_info = getattr(employee, "employee_work_info", None)
+            attendance.work_type_id = getattr(work_info, "work_type_id", None)
+        if not attendance.minimum_hour:
+            attendance.minimum_hour = minimum_hour or "00:00"
+        if not attendance.attendance_clock_in:
+            attendance.attendance_clock_in = clock_in_datetime.time()
+            attendance.attendance_clock_in_date = clock_in_date
+        attendance.attendance_clock_out = None
+        attendance.attendance_clock_out_date = None
+        attendance.attendance_validated = mark_validated
+
+    attendance.is_active = True
+    attendance.save()
+    sync_work_record_from_attendance(attendance)
+    reset_working_employee_cache()
+    return attendance, activity, created
+
+
 def clock_in_attendance_and_activity(
     employee,
     date_today,
@@ -141,79 +226,26 @@ def clock_in_attendance_and_activity(
         end_time        : end time in shift schedule
     """
 
-    # attendance activity create
-    activity = AttendanceActivity.objects.filter(
-        employee_id=employee,
+    attendance, _, created = create_or_resume_attendance_session(
+        employee=employee,
         attendance_date=attendance_date,
         clock_in_date=date_today,
         shift_day=day,
-        clock_out=None,
-    ).first()
-
-    if activity and not activity.clock_out:
-        activity.clock_out = in_datetime
-        activity.clock_out_date = date_today
-        activity.save()
-
-    last_closed_activity = (
-        AttendanceActivity.objects.filter(
-            employee_id=employee,
-            attendance_date=attendance_date,
-            clock_out__isnull=False,
-            clock_out_date__isnull=False,
-        )
-        .order_by("-out_datetime", "-id")
-        .first()
+        clock_in_datetime=in_datetime,
+        shift=shift,
+        minimum_hour=minimum_hour,
+        mark_validated=True,
     )
-    resumed_clock_in = in_datetime.time()
-    resumed_clock_in_datetime = in_datetime
-    resumed_clock_in_date = date_today
 
-    # If the user is checking in again after a check-out, continue from last check-out.
-    if last_closed_activity and last_closed_activity.out_datetime:
-        resumed_clock_in = last_closed_activity.clock_out
-        resumed_clock_in_datetime = last_closed_activity.out_datetime
-        resumed_clock_in_date = last_closed_activity.clock_out_date
-
-    new_activity = AttendanceActivity.objects.create(
-        employee_id=employee,
-        attendance_date=attendance_date,
-        clock_in_date=resumed_clock_in_date,
-        shift_day=day,
-        clock_in=resumed_clock_in,
-        in_datetime=resumed_clock_in_datetime,
-    )
-    # create attendance if not exist
-    attendance = Attendance.objects.filter(
-        employee_id=employee, attendance_date=attendance_date
-    )
-    if not attendance.exists():
-        attendance = Attendance()
-        attendance.employee_id = employee
-        attendance.shift_id = shift
-        attendance.work_type_id = attendance.employee_id.employee_work_info.work_type_id
-        attendance.attendance_date = attendance_date
-        attendance.attendance_day = day
-        attendance.attendance_clock_in = now
-        attendance.attendance_clock_in_date = date_today
-        attendance.minimum_hour = minimum_hour
-        attendance.attendance_validated = True
-        attendance.save()
-        # check here late come or not
-
+    if created:
         attendance = Attendance.find(attendance.id)
-        sync_work_record_from_attendance(attendance)
         late_come(
-            attendance=attendance, start_time=start_time, end_time=end_time, shift=shift
+            attendance=attendance,
+            start_time=start_time,
+            end_time=end_time,
+            shift=shift,
         )
     else:
-        attendance = attendance[0]
-        attendance.attendance_clock_out = None
-        attendance.attendance_clock_out_date = None
-        attendance.attendance_validated = True
-        attendance.save()
-        sync_work_record_from_attendance(attendance)
-        # delete if the attendance marked the early out
         early_out_instance = attendance.late_come_early_out.filter(type="early_out")
         if early_out_instance.exists():
             early_out_instance[0].delete()
@@ -370,7 +402,7 @@ def clock_out_attendance_and_activity(
             attendance_activity.clock_out_date = out_datetime.date()
             attendance_activity.out_datetime = out_datetime
             attendance_activity.save()
-    else:
+    elif can_extend_auto_checkout(attendance, out_datetime):
         latest_activity = (
             AttendanceActivity.objects.filter(
                 employee_id=employee,
@@ -382,23 +414,12 @@ def clock_out_attendance_and_activity(
             .first()
         )
         if latest_activity:
-            latest_out_datetime = latest_activity.out_datetime
-            if latest_out_datetime is None:
-                latest_out_datetime = datetime.combine(
-                    latest_activity.clock_out_date, latest_activity.clock_out
-                )
-            if timezone.is_naive(latest_out_datetime):
-                latest_out_datetime = timezone.make_aware(
-                    latest_out_datetime, timezone.get_current_timezone()
-                )
-
-            if out_datetime > latest_out_datetime:
-                latest_activity.clock_out = out_datetime.time()
-                latest_activity.clock_out_date = out_datetime.date()
-                latest_activity.out_datetime = out_datetime
-                latest_activity.save(
-                    update_fields=["clock_out", "clock_out_date", "out_datetime"]
-                )
+            latest_activity.clock_out = out_datetime.time()
+            latest_activity.clock_out_date = out_datetime.date()
+            latest_activity.out_datetime = out_datetime
+            latest_activity.save(
+                update_fields=["clock_out", "clock_out_date", "out_datetime"]
+            )
 
     attendance_activities = AttendanceActivity.objects.filter(
         employee_id=employee,
@@ -413,6 +434,7 @@ def clock_out_attendance_and_activity(
     attendance.attendance_clock_out_date = out_datetime.date()
     attendance.attendance_worked_hour = format_time(duration)
     attendance.attendance_overtime = overtime_calculation(attendance)
+    attendance.is_active = False
 
     # Business rule: once attendance is marked through check-in/check-out,
     # keep it validated so it appears as present in attendance views.
@@ -434,6 +456,23 @@ def get_auto_checkout_time():
         except ValueError:
             continue
     return datetime.strptime("18:30", "%H:%M").time()
+
+
+def can_extend_auto_checkout(attendance, out_datetime):
+    """
+    Allow a later manual clock-out to replace an automatic cutoff punch-out.
+    """
+    if attendance is None or attendance.attendance_clock_out is None or out_datetime is None:
+        return False
+
+    if attendance.attendance_clock_out != get_auto_checkout_time():
+        return False
+
+    recorded_clock_out_datetime = _resolve_attendance_clock_out_datetime(
+        attendance,
+        out_datetime,
+    )
+    return out_datetime > recorded_clock_out_datetime
 
 
 def _resolve_activity_start_datetime(activity, fallback_datetime):
@@ -556,6 +595,18 @@ def perform_clock_out(employee, date_today, now, out_datetime=None, attendance=N
     if attendance is None:
         return None
 
+    has_open_activity = AttendanceActivity.objects.filter(
+        employee_id=employee,
+        attendance_date=attendance.attendance_date,
+        clock_out__isnull=True,
+    ).exists()
+    if (
+        attendance.attendance_clock_out is not None
+        and not has_open_activity
+        and not can_extend_auto_checkout(attendance, out_datetime)
+    ):
+        return attendance
+
     if not attendance.attendance_day:
         day_name = attendance.attendance_date.strftime("%A").lower()
         attendance.attendance_day = EmployeeShiftDay.objects.get(day=day_name)
@@ -608,9 +659,7 @@ def perform_clock_out(employee, date_today, now, out_datetime=None, attendance=N
                 shift=shift,
             )
 
-    request = getattr(_thread_locals, "request", None)
-    if request is not None and hasattr(request, "working_employees"):
-        request.working_employees = None
+    reset_working_employee_cache()
 
     return attendance
 

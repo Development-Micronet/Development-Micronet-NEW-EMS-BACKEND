@@ -3,25 +3,28 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMultiAlternatives
 from django.core import signing
 from django.db.models import Q
 from django.contrib.auth.password_validation import validate_password
+from django.shortcuts import render
+from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from drf_yasg import openapi
+from django.views import View
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from base.backends import ConfiguredEmailBackend
+from base.email import build_reset_link, get_email_branding_context
 from base.models import BrevoEmailConfiguration
 from horilla_api.docs import document_api
 import logging
 import requests
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from rest_framework import status
 
 try:
@@ -40,6 +43,92 @@ from ...api_serializers.auth.serializers import (
     LoginRequestSerializer,
     ResetPasswordRequestSerializer,
 )
+
+
+class ResetPasswordPageView(View):
+    template_name = "auth/reset_password_page.html"
+
+    def get(self, request, uid, token):
+        user = ResetPasswordAPIView._get_user_from_uid(uid)
+        token_error = None
+        if not user:
+            token_error = "Invalid or expired reset link."
+        else:
+            is_valid_token, token_error = ResetPasswordAPIView.is_valid_reset_token(
+                user, uid, token
+            )
+            if is_valid_token:
+                token_error = None
+
+        context = {
+            **get_email_branding_context(),
+            "uid": uid,
+            "token": token,
+            "token_error": token_error,
+        }
+        return render(request, self.template_name, context)
+
+    def post(self, request, uid, token):
+        context = {
+            **get_email_branding_context(),
+            "uid": uid,
+            "token": token,
+        }
+        payload = {
+            "uid": uid,
+            "token": token,
+            "new_password": request.POST.get("new_password", ""),
+            "confirm_password": request.POST.get("confirm_password", ""),
+        }
+        serializer = ResetPasswordRequestSerializer(data=payload)
+        if not serializer.is_valid():
+            context["error"] = next(iter(serializer.errors.values()))[0]
+            return render(request, self.template_name, context, status=400)
+
+        user = ResetPasswordAPIView._get_user_from_uid(uid)
+        if not user:
+            context["token_error"] = "Invalid or expired reset link."
+            return render(request, self.template_name, context, status=400)
+
+        is_valid_token, token_error = ResetPasswordAPIView.is_valid_reset_token(
+            user, uid, token
+        )
+        if not is_valid_token:
+            context["token_error"] = token_error
+            return render(request, self.template_name, context, status=400)
+
+        cooldown_key = f"password_reset_cooldown_user_{user.pk}"
+        cooldown_until = cache.get(cooldown_key)
+        if cooldown_until:
+            remaining_seconds = int(cooldown_until - timezone.now().timestamp())
+            if remaining_seconds > 0:
+                context["error"] = (
+                    f"Please wait {remaining_seconds} seconds before resetting password again."
+                )
+                return render(request, self.template_name, context, status=429)
+
+        new_password = serializer.validated_data["new_password"]
+        if user.check_password(new_password):
+            context["error"] = (
+                "New password must be different from your current password."
+            )
+            return render(request, self.template_name, context, status=400)
+
+        try:
+            validate_password(new_password, user=user)
+        except DjangoValidationError as exc:
+            context["error"] = " ".join(exc.messages)
+            return render(request, self.template_name, context, status=400)
+
+        user.set_password(new_password)
+        user.save(update_fields=["password"])
+        cache.set(
+            cooldown_key,
+            timezone.now().timestamp() + ResetPasswordAPIView.COOLDOWN_SECONDS,
+            timeout=ResetPasswordAPIView.COOLDOWN_SECONDS,
+        )
+        context["success"] = "Password reset successfully. You can now sign in."
+        return render(request, self.template_name, context)
 
 
 class LoginAPIView(APIView):
@@ -360,30 +449,12 @@ class ForgotPasswordAPIView(APIView):
     # ==============================
     # Send Email via Brevo
     # ==============================
-    def _send_with_brevo(self, to_email, subject, text_body, reset_link, uid, token):
+    def _send_with_brevo(self, to_email, subject, text_body, html_body):
         sender = self._get_brevo_sender()
         if not sender:
             return False
 
         try:
-            expiry_minutes = max(1, self.get_reset_token_timeout() // 60)
-            html_body = f"""
-                <p>You requested a password reset.</p>
-                <p>
-                    <a href="{reset_link}"
-                       style="padding:10px 15px;
-                              background:#4CAF50;
-                              color:white;
-                              text-decoration:none;">
-                        Reset your password
-                    </a>
-                </p>
-                <p>This reset link will expire in {expiry_minutes} minutes.</p>
-                <p><strong>UID:</strong> {uid}</p>
-                <p><strong>Token:</strong> {token}</p>
-                <p>If you did not request this, you can ignore this email.</p>
-            """
-
             if BREVO_SDK_AVAILABLE:
                 configuration = sib_api_v3_sdk.Configuration()
                 configuration.api_key["api-key"] = sender["api_key"]
@@ -494,43 +565,27 @@ class ForgotPasswordAPIView(APIView):
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = self.make_reset_token(user)
 
-        reset_base_url = getattr(settings, "FRONTEND_RESET_PASSWORD_URL", "").strip()
-        if not reset_base_url:
-            reset_base_url = (
-                f"{request.scheme}://{request.get_host()}/api/auth/reset-password/"
-            )
-        if ":uid" in reset_base_url and ":token" in reset_base_url:
-            reset_link = (
-                reset_base_url.replace(":uid", uid).replace(":token", token)
-            )
-        elif "{uid}" in reset_base_url and "{token}" in reset_base_url:
-            reset_link = reset_base_url.format(uid=uid, token=token)
-        else:
-            parsed_url = urlparse(reset_base_url)
-            query_params = dict(parse_qsl(parsed_url.query, keep_blank_values=True))
-            query_params.update({"uid": uid, "token": token})
-            reset_link = urlunparse(
-                parsed_url._replace(query=urlencode(query_params, doseq=True))
-            )
+        reset_link = build_reset_link(uid=uid, token=token, request=request)
+        expiry_minutes = max(1, self.get_reset_token_timeout() // 60)
+        email_context = {
+            **get_email_branding_context(),
+            "recipient_name": user.get_full_name() or user.username or "there",
+            "reset_link": reset_link,
+            "uid": uid,
+            "token": token,
+            "expiry_minutes": expiry_minutes,
+        }
 
         subject = "Password Reset Request"
-        body = (
-            "You requested a password reset.\n\n"
-            f"Use the following link to reset your password:\n{reset_link}\n\n"
-            f"This reset link will expire in {self.get_reset_token_timeout() // 60 or 5} minutes.\n\n"
-            f"UID: {uid}\n"
-            f"Token: {token}\n\n"
-            "If you did not request this, you can safely ignore this email."
-        )
+        body = render_to_string("emails/forgot_password.txt", email_context)
+        html_body = render_to_string("emails/forgot_password.html", email_context)
 
         # Try Brevo first
         sent_via_brevo = self._send_with_brevo(
             to_email=recipient_email,
             subject=subject,
             text_body=body,
-            reset_link=reset_link,
-            uid=uid,
-            token=token,
+            html_body=html_body,
         )
 
         # Fallback to Django email backend
@@ -541,12 +596,14 @@ class ForgotPasswordAPIView(APIView):
                     email_backend, "dynamic_from_email_with_display_name", None
                 )
 
-                EmailMessage(
+                message = EmailMultiAlternatives(
                     subject=subject,
                     body=body,
                     from_email=from_email,
                     to=[recipient_email],
-                ).send(fail_silently=False)
+                )
+                message.attach_alternative(html_body, "text/html")
+                message.send(fail_silently=False)
 
                 logger.info(f"Password reset sent via fallback SMTP to {recipient_email}")
 

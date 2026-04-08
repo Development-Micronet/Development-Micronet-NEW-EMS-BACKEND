@@ -69,8 +69,34 @@ def generate_colors(num_colors):
     return colors
 
 
+def get_employee_from_user(user):
+    """
+    Safely fetch the employee linked to a user.
+    """
+    try:
+        return user.employee_get
+    except (AttributeError, Employee.DoesNotExist):
+        return None
+
+
+def can_create_project_records(user):
+    """
+    Admin/staff users and linked employee users can create project records.
+    """
+    return bool(
+        getattr(user, "is_authenticated", False)
+        and (
+            user.is_superuser
+            or user.is_staff
+            or get_employee_from_user(user) is not None
+        )
+    )
+
+
 def any_project_manager(user):
-    employee = user.employee_get
+    employee = get_employee_from_user(user)
+    if employee is None:
+        return False
     if employee.project_managers.all().exists():
         return True
     else:
@@ -78,7 +104,9 @@ def any_project_manager(user):
 
 
 def any_project_member(user):
-    employee = user.employee_get
+    employee = get_employee_from_user(user)
+    if employee is None:
+        return False
     if employee.project_members.all().exists():
         return True
     else:
@@ -86,7 +114,9 @@ def any_project_member(user):
 
 
 def any_task_manager(user):
-    employee = user.employee_get
+    employee = get_employee_from_user(user)
+    if employee is None:
+        return False
     if employee.task_set.all().exists():
         return True
     else:
@@ -94,7 +124,9 @@ def any_task_manager(user):
 
 
 def any_task_member(user):
-    employee = user.employee_get
+    employee = get_employee_from_user(user)
+    if employee is None:
+        return False
     if employee.tasks.all().exists():
         return True
     else:
@@ -221,8 +253,10 @@ def is_project_manager_or_super_user(request, project):
     Method to check whether user is a manager of project or
     user is a super user.
     """
-    return (
-        request.user.employee_get in project.managers.all() or request.user.is_superuser
+    employee = get_employee_from_user(request.user)
+    return bool(
+        request.user.is_superuser
+        or (employee is not None and employee in project.managers.all())
     )
 
 

@@ -15,18 +15,19 @@ class OnlineOfflineEmployeesAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from datetime import timedelta
+
         from django.utils import timezone
 
         from attendance.models import Attendance
 
-        # today = timezone.localdate()
+        today = timezone.localdate()
+        yesterday = today - timedelta(days=1)
 
-        attendances = Attendance.objects.filter(
-            # attendance_date=today
-        ).select_related(
+        attendances = Attendance.objects.select_related(
             "employee_id",
             "employee_id__employee_user_id",
-        )
+        ).order_by("employee_id__employee_user_id_id", "-attendance_date", "-id")
 
         data = []
         seen_users = set()
@@ -39,12 +40,19 @@ class OnlineOfflineEmployeesAPIView(APIView):
                 continue
 
             seen_users.add(user_id)
+            is_online = bool(attendance.attendance_clock_in) and (
+                attendance.attendance_clock_out is None
+            )
+            if attendance.attendance_date not in {today, yesterday}:
+                is_online = False
 
             data.append(
                 {
                     "user_id": user_id,
                     "name": f"{employee.employee_first_name} {employee.employee_last_name or ''}".strip(),
-                    "is_active": attendance.is_active,
+                    "is_active": is_online,
+                    "is_online": is_online,
+                    "status": "online" if is_online else "offline",
                 }
             )
 
@@ -434,7 +442,29 @@ def _should_auto_validate_attendance(attendance=None, activity=None):
     Late check-ins should stay pending so they remain visible in validate views.
     """
     check_in_time = None
-    if activity is not None:
+
+    employee = None
+    attendance_date = None
+    if attendance is not None:
+        employee = getattr(attendance, "employee_id", None)
+        attendance_date = getattr(attendance, "attendance_date", None)
+    elif activity is not None:
+        employee = getattr(activity, "employee_id", None)
+        attendance_date = getattr(activity, "attendance_date", None)
+
+    if employee is not None and attendance_date is not None:
+        first_activity = (
+            AttendanceActivity.objects.filter(
+                employee_id=employee,
+                attendance_date=attendance_date,
+            )
+            .order_by("clock_in_date", "clock_in", "id")
+            .first()
+        )
+        if first_activity is not None:
+            check_in_time = _coerce_time_value(getattr(first_activity, "clock_in", None))
+
+    if check_in_time is None and activity is not None:
         check_in_time = _coerce_time_value(getattr(activity, "clock_in", None))
     if check_in_time is None and attendance is not None:
         check_in_time = _coerce_time_value(
@@ -527,79 +557,96 @@ class ClockInAPIView(APIView):
     #         )
     #     return Response({"message": "Already clocked-in"}, status=400)
     def post(self, request):
-        if not request.user.employee_get.check_online():
-            # ... [Geo-fencing logic remains the same] ...
+        from django.utils import timezone as django_timezone
 
-            from django.utils import timezone as django_timezone
+        from attendance.models import Attendance
+        from employee.models import Employee
 
-            from attendance.models import Attendance, AttendanceActivity
-            from employee.models import Employee
+        employee = Employee.objects.get(employee_user_id=request.user)
+        if Attendance.objects.filter(
+            employee_id=employee,
+            attendance_clock_in__isnull=False,
+            attendance_clock_out__isnull=True,
+        ).exists():
+            return Response({"message": "Already clocked-in"}, status=400)
 
-            employee = Employee.objects.get(employee_user_id=request.user)
-            datetime_now = django_timezone.localtime(django_timezone.now())
+        datetime_now = django_timezone.localtime(django_timezone.now())
 
-            if request.__dict__.get("datetime"):
-                datetime_now = request.datetime
+        if request.__dict__.get("datetime"):
+            datetime_now = request.datetime
 
-            date_today = datetime_now.date()
-            now_time = datetime_now.strftime("%H:%M")
-            resumed_clock_in = datetime_now.time()
-            resumed_clock_in_datetime = datetime_now
-            resumed_clock_in_date = date_today
+        date_today = datetime_now.date()
+        attendance_date = date_today
+        day = EmployeeShiftDay.objects.get(day=date_today.strftime("%A").lower())
+        shift = None
+        minimum_hour = "00:00"
+        start_time_sec = 0
+        end_time_sec = 0
 
-            # 1. Create Activity (This triggers the model's save() logic)
-            activity = AttendanceActivity.objects.create(
-                employee_id=employee,
-                attendance_date=date_today,
-                clock_in_date=resumed_clock_in_date,
-                clock_in=resumed_clock_in,
-                in_datetime=resumed_clock_in_datetime,
+        work_info = getattr(employee, "employee_work_info", None)
+        if work_info is not None:
+            shift = getattr(work_info, "shift_id", None)
+
+        if shift is not None:
+            now_sec = strtime_seconds(datetime_now.strftime("%H:%M"))
+            mid_day_sec = strtime_seconds("12:00")
+            minimum_hour, start_time_sec, end_time_sec = shift_schedule_today(
+                day=day,
+                shift=shift,
             )
+            if start_time_sec > end_time_sec and mid_day_sec > now_sec:
+                attendance_date = date_today - timedelta(days=1)
+                day = EmployeeShiftDay.objects.get(
+                    day=attendance_date.strftime("%A").lower()
+                )
+                minimum_hour, start_time_sec, end_time_sec = shift_schedule_today(
+                    day=day,
+                    shift=shift,
+                )
 
-            # 2. Get/Create Attendance
-            attendance, created = Attendance.objects.get_or_create(
-                employee_id=employee,
-                attendance_date=date_today,
-                defaults={
-                    "attendance_clock_in_date": date_today,
-                    "attendance_clock_in": now_time,
-                },
-            )
+        attendance, activity, created = create_or_resume_attendance_session(
+            employee=employee,
+            attendance_date=attendance_date,
+            clock_in_date=date_today,
+            shift_day=day,
+            clock_in_datetime=datetime_now,
+            shift=shift,
+            minimum_hour=minimum_hour,
+            mark_validated=True,
+        )
 
-            # 3. Update parent record
-            if created or not attendance.attendance_clock_in:
-                attendance.attendance_clock_in_date = resumed_clock_in_date
-                attendance.attendance_clock_in = resumed_clock_in
-            attendance.is_active = True
+        if created and shift is not None:
+            late_come(
+                attendance=attendance,
+                start_time=start_time_sec,
+                end_time=end_time_sec,
+                shift=shift,
+            )
+        else:
+            early_out_instance = attendance.late_come_early_out.filter(type="early_out")
+            if early_out_instance.exists():
+                early_out_instance.first().delete()
 
-            # Manually sync the late come flag from activity to parent if needed
-            attendance.is_late_come = activity.is_late_come
-            attendance.attendance_validated = _should_auto_validate_attendance(
-                attendance=attendance, activity=activity
-            )
-            attendance.save()
-            sync_work_record_from_attendance(attendance)
+        attendance.attendance_validated = _should_auto_validate_attendance(
+            attendance=attendance,
+            activity=activity,
+        )
+        attendance.save(update_fields=["attendance_validated", "modified_by"])
+        sync_work_record_from_attendance(attendance)
 
-            # Only update the flag if it hasn't been marked Late yet
-            if activity.is_late_come:
-                attendance.is_late_come = True
-            attendance.attendance_validated = _should_auto_validate_attendance(
-                attendance=attendance, activity=activity
-            )
-            attendance.save()
-            sync_work_record_from_attendance(attendance)
-            # 4. Return the new fields in the response
-            return Response(
-                {
-                    "message": "Clocked-In",
-                    "clock_in": datetime_now.strftime("%I:%M %p"),
-                    "is_active": attendance.is_active,
-                    "is_late_come": activity.is_late_come,  # Added this
-                    "is_early_out": activity.is_early_out,  # Added this
-                },
-                status=200,
-            )
-        return Response({"message": "Already clocked-in"}, status=400)
+        activity.refresh_from_db()
+        return Response(
+            {
+                "message": "Clocked-In",
+                "clock_in": datetime_now.strftime("%I:%M %p"),
+                "is_active": True,
+                "is_online": True,
+                "status": "online",
+                "is_late_come": activity.is_late_come,
+                "is_early_out": activity.is_early_out,
+            },
+            status=200,
+        )
 
 
 class ClockOutAPIView(APIView):
@@ -625,115 +672,66 @@ class ClockOutAPIView(APIView):
         from employee.models import Employee
 
         employee = Employee.objects.get(employee_user_id=request.user)
+
         current_datetime = django_timezone.localtime(django_timezone.now())
         current_date = current_datetime.date()
         now_time = current_datetime.strftime("%H:%M")
 
-        # Try to find the latest open AttendanceActivity for today
-        open_activity = (
+        attendance = (
+            Attendance.objects.filter(
+                employee_id=employee,
+                attendance_clock_in__isnull=False,
+                attendance_clock_out__isnull=True,
+            )
+            .order_by("-attendance_date", "-id")
+            .first()
+        )
+        if attendance is None:
+            attendance = (
+                Attendance.objects.filter(employee_id=employee)
+                .order_by("-attendance_date", "-id")
+                .first()
+            )
+            if attendance is None or attendance.attendance_clock_out is None:
+                return Response({"message": "Already clocked-out"}, status=400)
+
+        attendance = perform_clock_out(
+            employee=employee,
+            date_today=current_date,
+            now=now_time,
+            out_datetime=current_datetime,
+            attendance=attendance,
+        )
+
+        activity_instance = (
             AttendanceActivity.objects.filter(
                 employee_id=employee,
-                attendance_date=current_date,
-                clock_out__isnull=True,
+                attendance_date=attendance.attendance_date,
             )
-            .order_by("-in_datetime")
+            .order_by("-clock_in_date", "-clock_in", "-id")
             .first()
         )
 
-        activity_instance = None  # To store which activity we worked on
-
-        if open_activity:
-            open_activity.clock_out = now_time
-            open_activity.clock_out_date = current_date
-            open_activity.out_datetime = current_datetime
-            open_activity.save()  # This triggers the is_early_out logic in model
-            activity_instance = open_activity
-        else:
-            latest_activity = (
-                AttendanceActivity.objects.filter(
-                    employee_id=employee,
-                    attendance_date=current_date,
-                    clock_out__isnull=False,
-                    clock_out_date__isnull=False,
-                )
-                .order_by("-clock_out_date", "-clock_out", "-id")
-                .first()
-            )
-            if latest_activity:
-                latest_out_datetime = latest_activity.out_datetime
-                if latest_out_datetime is None:
-                    latest_out_datetime = django_timezone.make_aware(
-                        datetime.combine(
-                            latest_activity.clock_out_date, latest_activity.clock_out
-                        ),
-                        django_timezone.get_current_timezone(),
-                    )
-                elif django_timezone.is_naive(latest_out_datetime):
-                    latest_out_datetime = django_timezone.make_aware(
-                        latest_out_datetime, django_timezone.get_current_timezone()
-                    )
-
-                if current_datetime > latest_out_datetime:
-                    latest_activity.clock_out = now_time
-                    latest_activity.clock_out_date = current_date
-                    latest_activity.out_datetime = current_datetime
-                    latest_activity.save(
-                        update_fields=["clock_out", "clock_out_date", "out_datetime"]
-                    )
-                    activity_instance = latest_activity
-
-            if activity_instance is None:
-                activity_instance = AttendanceActivity.objects.create(
-                    employee_id=employee,
-                    attendance_date=current_date,
-                    clock_in_date=current_date,
-                    clock_in=now_time,
-                    in_datetime=current_datetime,
-                    clock_out_date=current_date,
-                    clock_out=now_time,
-                    out_datetime=current_datetime,
-                )  # This triggers the is_early_out logic in model
-
-        # Update or create Attendance record
-        attendance, _ = Attendance.objects.get_or_create(
-            employee_id=employee,
-            attendance_date=current_date,
-            defaults={
-                "attendance_clock_in_date": current_date,
-                "attendance_clock_in": now_time,
-            },
-        )
-        attendance.attendance_clock_out = now_time
-        attendance.attendance_clock_out_date = current_date
-        attendance.is_active = False
         attendance.attendance_validated = _should_auto_validate_attendance(
-            attendance=attendance, activity=activity_instance
+            attendance=attendance,
+            activity=activity_instance,
         )
-
-        # Optional: Sync the early out flag to the main Attendance record
-        attendance.is_early_out = activity_instance.is_early_out
-        attendance.save()
-        sync_work_record_from_attendance(attendance)
-
-        # Only update Early Out if this is actually the last activity
-        if activity_instance.is_early_out:
-            attendance.is_early_out = True
-        else:
-            # If this isn't an early out anymore (because of a newer punch),
-            # we might need to reset it.
-            attendance.is_early_out = False
-        attendance.attendance_validated = _should_auto_validate_attendance(
-            attendance=attendance, activity=activity_instance
-        )
-        attendance.save()
+        attendance.save(update_fields=["attendance_validated", "modified_by"])
         sync_work_record_from_attendance(attendance)
         return Response(
             {
                 "message": "Clocked-Out",
-                "clock_out": current_datetime.strftime("%I:%M %p"),
-                "is_active": attendance.is_active,
-                "earlyout": activity_instance.is_early_out,  # Status from model logic
-                "is_late_come": activity_instance.is_late_come,  # Just for completeness
+                "clock_out": attendance.attendance_clock_out.strftime("%I:%M %p"),
+                "is_active": False,
+                "is_online": False,
+                "status": "offline",
+                "earlyout": bool(activity_instance and activity_instance.is_early_out),
+                "is_early_out": bool(
+                    activity_instance and activity_instance.is_early_out
+                ),
+                "is_late_come": bool(
+                    activity_instance and activity_instance.is_late_come
+                ),
             },
             status=200,
         )

@@ -658,7 +658,8 @@ def get_working_today(queryset, _name, value):
     working_employees = Attendance.objects.filter(
         attendance_date__gte=yesterday,
         attendance_date__lte=today,
-        attendance_clock_out_date__isnull=True,
+        attendance_clock_in__isnull=False,
+        attendance_clock_out__isnull=True,
     ).values_list("employee_id", flat=True)
 
     if value:

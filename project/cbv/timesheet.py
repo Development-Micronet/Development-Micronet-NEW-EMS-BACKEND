@@ -29,6 +29,16 @@ from project.cbv.projects import DynamicProjectCreationFormView
 from project.cbv.tasks import DynamicTaskCreateFormView
 from project.filters import TimeSheetFilter
 from project.forms import TimeSheetForm
+from project.methods import (
+    any_project_manager,
+    any_project_member,
+    any_task_manager,
+    any_task_member,
+    can_create_project_records,
+    get_employee_from_user,
+    time_sheet_update_permissions,
+    you_dont_have_permission,
+)
 from project.models import Project, Task, TimeSheet
 
 
@@ -269,9 +279,6 @@ class TaskTimeSheet(TimeSheetList):
 
 
 @method_decorator(login_required, name="dispatch")
-@method_decorator(
-    is_projectmanager_or_member_or_perms("project.view_timesheet"), name="dispatch"
-)
 class TimeSheetFormView(HorillaFormView):
     """
     form view for create project
@@ -286,7 +293,9 @@ class TimeSheetFormView(HorillaFormView):
         self.dynamic_create_fields = [
             ("task_id", DynamicTaskCreateFormView),
         ]
-        if self.request.user.has_perm("project.add_project"):
+        if can_create_project_records(self.request.user) or self.request.user.has_perm(
+            "project.add_project"
+        ):
             self.dynamic_create_fields.append(
                 ("project_id", DynamicProjectCreationFormView)
             )
@@ -295,6 +304,26 @@ class TimeSheetFormView(HorillaFormView):
     model = TimeSheet
     new_display_title = _("Create") + " " + model._meta.verbose_name
     # template_name = "cbv/timesheet/form.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        pk = kwargs.get("pk")
+        has_access = bool(
+            request.user.has_perm("project.view_timesheet")
+            or any_project_manager(request.user)
+            or any_project_member(request.user)
+            or any_task_manager(request.user)
+            or any_task_member(request.user)
+        )
+
+        if pk:
+            has_access = has_access or time_sheet_update_permissions(request, pk)
+        else:
+            has_access = has_access or can_create_project_records(request.user)
+
+        if not has_access:
+            return you_dont_have_permission(request)
+
+        return super().dispatch(request, *args, **kwargs)
 
     def get_initial(self) -> dict:
         initial = super().get_initial()
@@ -309,18 +338,23 @@ class TimeSheetFormView(HorillaFormView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         task_id = self.kwargs.get("task_id")
-        user_employee_id = self.request.user.employee_get.id
+        user_employee = get_employee_from_user(self.request.user)
+        user_employee_id = user_employee.id if user_employee else None
         project = None
+        employee = Employee.objects.none()
+        task = None
         if task_id:
             task = Task.objects.get(id=task_id)
             project = task.project
-            employee = Employee.objects.filter(id=user_employee_id)
+            if user_employee_id:
+                employee = Employee.objects.filter(id=user_employee_id)
 
         if self.form.instance.pk:
             task_id = self.form.instance.task_id.id
             project = self.form.instance.project_id
             tasks = Task.objects.filter(project=project)
-            employee = Employee.objects.filter(id=user_employee_id)
+            if user_employee_id:
+                employee = Employee.objects.filter(id=user_employee_id)
             task = Task.objects.get(id=task_id)
             self.form.fields["task_id"].queryset = tasks
             self.form.fields["task_id"].choices = [
@@ -335,13 +369,8 @@ class TimeSheetFormView(HorillaFormView):
         if project:
             if self.request.user.is_superuser or self.request.user.has_perm(
                 "project.add_project"
-            ):
-                members = (
-                    project.managers.all()
-                    | project.members.all()
-                    | task.task_members.all()
-                    | task.task_managers.all()
-                ).distinct()
+            ) or self.request.user.is_staff or user_employee is None:
+                members = Employee.objects.all()
             elif employee.first() in project.managers.all():
                 members = (
                     employee
@@ -360,10 +389,12 @@ class TimeSheetFormView(HorillaFormView):
 
         # If the timesheet create directly
         else:
-            employee = self.request.user.employee_get
-            if self.request.user.has_perm("project.add_timesheet"):
+            employee = user_employee
+            if self.request.user.has_perm("project.add_timesheet") or can_create_project_records(
+                self.request.user
+            ):
                 projects = Project.objects.all()
-            else:
+            elif employee is not None:
                 projects = (
                     Project.objects.filter(managers=employee)
                     | Project.objects.filter(members=employee)
@@ -378,6 +409,8 @@ class TimeSheetFormView(HorillaFormView):
                         )
                     )
                 ).distinct()
+            else:
+                projects = Project.objects.none()
             self.form.fields["project_id"].queryset = projects
         return context
 

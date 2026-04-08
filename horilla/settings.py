@@ -48,7 +48,7 @@ SECRET_KEY = env("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env("DEBUG")
 
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 
 # Admin access token used by the employee API to allow limited admin visibility via header
 # Set via environment variable (recommended) or in settings for local development
@@ -217,7 +217,7 @@ MESSAGE_TAGS = {
 }
 
 
-CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
+CSRF_TRUSTED_ORIGINS = [origin.rstrip("/") for origin in env("CSRF_TRUSTED_ORIGINS")]
 
 LOGIN_URL = "/login"
 
@@ -312,7 +312,7 @@ REST_FRAMEWORK = {
 }
 
 # CORS Configuration for React frontend
-CORS_ALLOW_ALL_ORIGINS = True  # Allow all origins (for development)
+CORS_ALLOW_ALL_ORIGINS = DEBUG
 
 # Alternatively, if you want to specify allowed origins:
 raw_cors_origins = env(
@@ -326,6 +326,7 @@ raw_cors_origins = env(
         "http://127.0.0.1:8000",
         "http://192.168.1.192:5173",
         "http://192.168.1.247:5176",  # Django development
+        "http://13.202.113.121",
         "http://13.202.113.121:7098", # Production IP
     ],
     cast=list,
@@ -359,7 +360,18 @@ EMAIL_FILE_PATH = os.path.join(BASE_DIR, "emails")
 BREVO_API_KEY = env("BREVO_API_KEY", default="")
 BREVO_FROM_EMAIL = env("BREVO_FROM_EMAIL", default="noreply@horilla.com")
 BREVO_FROM_NAME = env("BREVO_FROM_NAME", default="HR Management")
-FRONTEND_RESET_PASSWORD_URL = env("Frontend_url", default="http://192.168.1.192:5173/reset-password/:uid/:token")
+EMAIL_BRAND_NAME = env("EMAIL_BRAND_NAME", default="Ace Technologies")
+EMAIL_SUPPORT_EMAIL = env("EMAIL_SUPPORT_EMAIL", default="info@acetechnologys.com")
+PUBLIC_BACKEND_URL = env(
+    "PUBLIC_BACKEND_URL",
+    default="" if DEBUG else "http://13.202.113.121",
+).rstrip("/")
+FRONTEND_APP_URL = env("FRONTEND_APP_URL", default="").rstrip("/")
+FRONTEND_RESET_PASSWORD_URL = (
+    env("FRONTEND_RESET_PASSWORD_URL", default="")
+    or env("Frontend_url", default="")
+    or (f"{FRONTEND_APP_URL}/reset-password/:uid/:token" if FRONTEND_APP_URL else "")
+)
 PASSWORD_RESET_TIMEOUT = env.int("PASSWORD_RESET_TIMEOUT", default=300)
 AUTO_CHECK_OUT_TIME = env("AUTO_CHECK_OUT_TIME", default="18:30")
 

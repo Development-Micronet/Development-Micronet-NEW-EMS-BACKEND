@@ -51,7 +51,10 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         assert response.status_code == 401
         assert response.json()["error"] == "Invalid credentials"
 
-    @override_settings(RETURN_RESET_LINK_IN_FORGOT_PASSWORD_RESPONSE=True)
+    @override_settings(
+        RETURN_RESET_LINK_IN_FORGOT_PASSWORD_RESPONSE=True,
+        FRONTEND_RESET_PASSWORD_URL="",
+    )
     @patch("horilla_api.api_views.auth.views.ForgotPasswordAPIView._send_with_brevo")
     def test_forgot_password_returns_usable_reset_token_for_five_minutes(
         self, mock_send_with_brevo
@@ -68,6 +71,54 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         forgot_data = forgot_response.json()
         assert "uid" in forgot_data
         assert "token" in forgot_data
+        assert "reset_link" in forgot_data
+        assert forgot_data["reset_link"].startswith("http://testserver/auth/reset-password/")
+
+    @override_settings(
+        RETURN_RESET_LINK_IN_FORGOT_PASSWORD_RESPONSE=True,
+        FRONTEND_RESET_PASSWORD_URL="",
+    )
+    @patch("horilla_api.api_views.auth.views.ForgotPasswordAPIView._send_with_brevo")
+    def test_forgot_password_ignores_frontend_origin_for_backend_reset_page(
+        self, mock_send_with_brevo
+    ):
+        mock_send_with_brevo.return_value = True
+
+        forgot_response = self.client.post(
+            "/api/auth/forgot-password/",
+            {"email": self.employee.email},
+            format="json",
+            HTTP_ORIGIN="http://192.168.1.50:5173",
+        )
+
+        assert forgot_response.status_code == 200
+        forgot_data = forgot_response.json()
+        assert forgot_data["reset_link"].startswith(
+            "http://testserver/auth/reset-password/"
+        )
+
+    @override_settings(
+        RETURN_RESET_LINK_IN_FORGOT_PASSWORD_RESPONSE=True,
+        FRONTEND_RESET_PASSWORD_URL="",
+        PUBLIC_BACKEND_URL="http://13.202.113.121",
+    )
+    @patch("horilla_api.api_views.auth.views.ForgotPasswordAPIView._send_with_brevo")
+    def test_forgot_password_uses_public_backend_url_when_configured(
+        self, mock_send_with_brevo
+    ):
+        mock_send_with_brevo.return_value = True
+
+        forgot_response = self.client.post(
+            "/api/auth/forgot-password/",
+            {"email": self.employee.email},
+            format="json",
+        )
+
+        assert forgot_response.status_code == 200
+        forgot_data = forgot_response.json()
+        assert forgot_data["reset_link"].startswith(
+            "http://13.202.113.121/auth/reset-password/"
+        )
 
         reset_response = self.client.post(
             "/api/auth/reset-password/",

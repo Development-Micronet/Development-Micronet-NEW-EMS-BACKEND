@@ -565,10 +565,13 @@ class Employee(models.Model):
                     or request.working_employees is None
                 ):
                     today = datetime.now().date()
+                    yesterday = today - timedelta(days=1)
                     # Check only today's attendance without clock_out
                     working_employees = Attendance.objects.filter(
-                        attendance_date=today,
-                        attendance_clock_out_date__isnull=True,
+                        attendance_date__gte=yesterday,
+                        attendance_date__lte=today,
+                        attendance_clock_in__isnull=False,
+                        attendance_clock_out__isnull=True,
                     ).values_list("employee_id", flat=True)
                     setattr(request, "working_employees", working_employees)
                 working_employees = request.working_employees

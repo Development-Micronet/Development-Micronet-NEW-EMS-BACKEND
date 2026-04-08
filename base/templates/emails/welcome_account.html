@@ -1,0 +1,38 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Welcome to {{ brand_name }}{% endblock %}
+{% block preheader %}Your employee account has been created. Your username and temporary password are included below.{% endblock %}
+{% block heading %}Welcome to {{ brand_name }}{% endblock %}
+
+{% block content %}
+<p style="margin:0 0 16px 0;">Hello {{ recipient_name }},</p>
+<p style="margin:0 0 16px 0;">
+    Your employee account has been created successfully. You can now sign in using the credentials below.
+</p>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #dbe5ef;border-radius:14px;background-color:#f8fbff;margin:0 0 20px 0;">
+    <tr>
+        <td style="padding:18px;">
+            <div style="font-size:14px;line-height:22px;color:#475569;font-weight:700;margin-bottom:10px;">Login credentials</div>
+            <div style="font-size:14px;line-height:22px;color:#334155;margin-bottom:8px;"><strong>Username:</strong> <span style="word-break:break-all;">{{ username }}</span></div>
+            <div style="font-size:14px;line-height:22px;color:#334155;"><strong>Temporary Password:</strong> <span style="word-break:break-all;">{{ password }}</span></div>
+        </td>
+    </tr>
+</table>
+{% if login_url %}
+<table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0;">
+    <tr>
+        <td align="center" bgcolor="#0e2d57" style="border-radius:10px;">
+            <a href="{{ login_url }}" style="display:inline-block;padding:14px 24px;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;">
+                Open Login Page
+            </a>
+        </td>
+    </tr>
+</table>
+{% endif %}
+<p style="margin:0 0 12px 0;">
+    For security, please sign in and change your password as soon as possible.
+</p>
+<p style="margin:0;">
+    If you were not expecting this account, please contact support immediately.
+</p>
+{% endblock %}

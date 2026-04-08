@@ -29,7 +29,11 @@ from project.cbv.project_stage import StageDynamicCreateForm
 from project.cbv.projects import DynamicProjectCreationFormView
 from project.filters import TaskAllFilter
 from project.forms import TaskAllForm
-from project.methods import you_dont_have_permission
+from project.methods import (
+    can_create_project_records,
+    get_employee_from_user,
+    you_dont_have_permission,
+)
 from project.models import Project, ProjectStage, Task
 from project.templatetags.taskfilters import task_crud_perm
 
@@ -182,13 +186,17 @@ class TasksNavBar(HorillaNavView):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        employee = self.request.user.employee_get
+        employee = get_employee_from_user(self.request.user)
         projects = Project.objects.all()
         managers = [
             manager for project in projects for manager in project.managers.all()
         ]
         self.search_url = reverse("tasks-list-view")
-        if employee in managers or self.request.user.has_perm("project.add_task"):
+        if (
+            can_create_project_records(self.request.user)
+            or employee in managers
+            or self.request.user.has_perm("project.add_task")
+        ):
             self.create_attrs = f"""
                                     onclick = "event.stopPropagation();"
                                     data-toggle="oh-modal-toggle"
@@ -258,16 +266,65 @@ class TaskCreateForm(HorillaFormView):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        if self.request.user.has_perm("project.view_task"):
+        if can_create_project_records(self.request.user) or self.request.user.has_perm(
+            "project.view_task"
+        ):
             self.dynamic_create_fields = [
                 ("project", DynamicProjectCreationFormView),
                 ("stage", StageDynamicCreateForm, ["project"]),
             ]
 
+    def dispatch(self, request, *args, **kwargs):
+        employee = get_employee_from_user(request.user)
+        project_id = kwargs.get("project_id")
+        stage_id = kwargs.get("stage_id")
+        task_id = kwargs.get("pk")
+
+        has_access = False
+        if task_id:
+            task = Task.objects.filter(id=task_id).first()
+            if task:
+                has_access = bool(
+                    request.user.is_superuser
+                    or request.user.has_perm("project.change_task")
+                    or request.user.has_perm("project.change_project")
+                    or (
+                        employee is not None
+                        and (
+                            employee in task.task_managers.all()
+                            or employee in task.task_members.all()
+                            or employee in task.project.managers.all()
+                            or employee in task.project.members.all()
+                        )
+                    )
+                )
+        else:
+            has_access = bool(
+                can_create_project_records(request.user)
+                or request.user.has_perm("project.add_task")
+            )
+            if not has_access and employee is not None:
+                if project_id:
+                    project = Project.objects.filter(id=project_id).first()
+                    has_access = bool(
+                        project is not None and employee in project.managers.all()
+                    )
+                elif stage_id:
+                    stage = ProjectStage.objects.filter(id=stage_id).first()
+                    has_access = bool(
+                        stage is not None and employee in stage.project.managers.all()
+                    )
+
+        if not has_access:
+            return you_dont_have_permission(request)
+
+        return super().dispatch(request, *args, **kwargs)
+
     def get(self, request, *args, pk=None, **kwargs):
         project_id = self.kwargs.get("project_id")
         stage_id = self.kwargs.get("stage_id")
         task_id = self.kwargs.get("pk")
+        employee = get_employee_from_user(request.user)
         # try:
         if project_id:
             project = Project.objects.filter(id=project_id).first()
@@ -279,7 +336,8 @@ class TaskCreateForm(HorillaFormView):
         elif not task_id:
             return super().get(request, *args, pk=pk, **kwargs)
         if (
-            request.user.employee_get in project.managers.all()
+            can_create_project_records(request.user)
+            or (employee is not None and employee in project.managers.all())
             or request.user.is_superuser
             or request.user.has_perm("project.add_task")
         ):
@@ -289,7 +347,7 @@ class TaskCreateForm(HorillaFormView):
             ]
             return super().get(request, *args, pk=pk, **kwargs)
         elif task_id:
-            if request.user.employee_get in task.task_managers.all():
+            if employee is not None and employee in task.task_managers.all():
                 return super().get(request, *args, pk=pk, **kwargs)
 
         else:
@@ -347,7 +405,7 @@ class TaskCreateForm(HorillaFormView):
                 self.form.fields["project"].widget = forms.HiddenInput()
                 self.form.fields["stage"].widget = forms.HiddenInput()
         else:
-            if self.request.user.is_superuser:
+            if can_create_project_records(self.request.user) or self.request.user.is_superuser:
                 self.dynamic_create_fields = [
                     ("project", DynamicProjectCreationFormView),
                     ("stage", StageDynamicCreateForm, ["project"]),
@@ -355,7 +413,8 @@ class TaskCreateForm(HorillaFormView):
 
         if project_id or stage_id:
             if (
-                self.request.user.employee_get in project.managers.all()
+                can_create_project_records(self.request.user)
+                or get_employee_from_user(self.request.user) in project.managers.all()
                 or self.request.user.is_superuser
             ):
 

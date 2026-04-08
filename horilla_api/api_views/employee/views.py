@@ -42,6 +42,7 @@ from horilla_documents.models import Document, DocumentRequest
 from notifications.signals import notify
 
 from ...api_decorators.base.decorators import (
+    ManagerPermission,
     manager_or_owner_permission_required,
     manager_permission_required,
 )
@@ -1077,6 +1078,28 @@ class EmployeeWorkInformationAPIView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    def _resolve_target_employee(self, request, pk=None):
+        employee_id = (
+            request.data.get("employee_id")
+            or request.query_params.get("employee_id")
+            or pk
+        )
+        if not employee_id:
+            return None
+        try:
+            return Employee.objects.get(pk=employee_id)
+        except Employee.DoesNotExist:
+            return None
+
+    def _can_update_work_info(self, request, employee):
+        request_employee = getattr(request.user, "employee_get", None)
+        if request_employee and request_employee.pk == employee.pk:
+            return True
+        permission = ManagerPermission()
+        return permission.has_permission(
+            request, "employee.change_employeeworkinformation"
+        )
+
     @document_api(
         operation_description="Get employee work information - retrieve specific employee or list all work information with pagination",
         tags=["Employee Management"],
@@ -1163,6 +1186,38 @@ class EmployeeWorkInformationAPIView(APIView):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    # Keep the final PUT implementation owner-aware while preserving manager/admin access.
+    def put(self, request, pk=None):
+        employee = self._resolve_target_employee(request, pk=pk)
+        if employee is None:
+            return Response(
+                {"error": "Work information not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        print("PUT EmployeeWorkInformation - PK:", pk, "Employee ID:", employee.id)
+
+        if not self._can_update_work_info(request, employee):
+            return Response(
+                {"error": "You do not have permission to perform this action."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        work_info, _ = EmployeeWorkInformation.objects.get_or_create(employee_id=employee)
+        data = request.data.copy()
+        if "employee_id" in data:
+            data.pop("employee_id")
+        if "user_id" in data:
+            data.pop("user_id")
+
+        serializer = EmployeeWorkInformationSerializer(
+            work_info, data=data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     @method_decorator(
         permission_required("employee.delete_employeeworkinformation"), name="dispatch"
     )
@@ -1236,6 +1291,32 @@ class EmployeeMyWorkInfoAPIView(APIView):
         serializer = EmployeeWorkInformationSerializer(work_info)
         return Response(serializer.data, status=200)
 
+    @document_api(
+        operation_description="Update the authenticated employee's work information",
+        tags=["Employee Management"],
+    )
+    def put(self, request):
+        employee = getattr(request.user, "employee_get", None)
+        if not employee:
+            return Response(
+                {"error": "No employee record found for the authenticated user."},
+                status=404,
+            )
+
+        work_info, _ = EmployeeWorkInformation.objects.get_or_create(employee_id=employee)
+        data = request.data.copy()
+        if "employee_id" in data:
+            data.pop("employee_id")
+        if "user_id" in data:
+            data.pop("user_id")
+
+        serializer = EmployeeWorkInformationSerializer(
+            work_info, data=data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class EmployeeWorkInfoImportView(APIView):
     """
@@ -1247,6 +1328,7 @@ class EmployeeWorkInfoImportView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+
     parser_classes = [MultiPartParser, FormParser]
 
     @manager_permission_required("employee.add_employeeworkinformation")

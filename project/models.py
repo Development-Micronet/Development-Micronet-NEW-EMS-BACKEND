@@ -47,6 +47,16 @@ def validate_time_format(value):
         raise ValidationError(_("Invalid format")) from error
 
 
+def _is_admin_or_employee_user(user):
+    if not getattr(user, "is_authenticated", False):
+        return False
+    try:
+        employee = user.employee_get
+    except (AttributeError, Employee.DoesNotExist):
+        employee = None
+    return bool(user.is_superuser or user.is_staff or employee is not None)
+
+
 class Project(HorillaModel):
     PROJECT_STATUS = [
         ("new", _("New")),
@@ -573,11 +583,14 @@ class TimeSheet(HorillaModel):
             raise ValidationError(
                 {"description": "Please provide a description to your Time sheet"}
             )
+        request = getattr(_thread_locals, "request", None)
+        user = getattr(request, "user", None)
+        skip_membership_validation = _is_admin_or_employee_user(user)
         if self.employee_id:
             employee = self.employee_id
             if self.task_id:
                 task = self.task_id
-                if (
+                if not skip_membership_validation and (
                     not employee in task.task_managers.all()
                     and not employee in task.task_members.all()
                     and not employee in task.project.managers.all()
@@ -585,7 +598,7 @@ class TimeSheet(HorillaModel):
                 ):
                     raise ValidationError(_("Employee not included in this task"))
             elif self.project_id:
-                if (
+                if not skip_membership_validation and (
                     not employee in self.project_id.managers.all()
                     and not employee in self.project_id.members.all()
                 ):

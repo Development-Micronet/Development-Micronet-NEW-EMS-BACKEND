@@ -37,6 +37,8 @@ from .decorator import *
 from .filters import ProjectFilter, TaskAllFilter, TaskFilter, TimeSheetFilter
 from .forms import *
 from .methods import (
+    can_create_project_records,
+    get_employee_from_user,
     is_project_manager_or_super_user,
     is_projectmanager_or_member_or_perms,
     is_task_manager,
@@ -188,12 +190,15 @@ def project_view(request):
     return JsonResponse(data)
 
 
-@permission_required(perm="project.add_project")
 @login_required
 def create_project(request):
     """
     For creating new project
     """
+    if not can_create_project_records(request.user):
+        return JsonResponse(
+            {"success": False, "message": "You don't have permission"}, status=403
+        )
     if request.method == "POST":
         form = ProjectForm(request.POST, request.FILES)
         if form.is_valid():
@@ -1699,22 +1704,29 @@ def get_members(request):
     project_id = request.GET.get("project_id")
     task_id = request.GET.get("task_id")
     form = TimeSheetForm()
+    employee = get_employee_from_user(request.user)
+    employee_queryset = (
+        Employee.objects.filter(id=employee.id)
+        if employee is not None
+        else Employee.objects.none()
+    )
     if project_id and task_id:
         if task_id != "dynamic_create" and project_id != "dynamic_create":
             project = Project.objects.filter(id=project_id).first()
             task = Task.objects.filter(id=task_id).first()
-            employee = Employee.objects.filter(id=request.user.employee_get.id)
-            if employee.first() in project.managers.all():
+            if request.user.is_superuser or request.user.is_staff:
+                members = Employee.objects.all()
+            elif employee_queryset.first() in project.managers.all():
                 members = (
-                    employee
+                    employee_queryset
                     | project.members.all()
                     | task.task_managers.all()
                     | task.task_members.all()
                 ).distinct()
-            elif employee.first() in task.task_managers.all():
-                members = (employee | task.task_members.all()).distinct()
+            elif employee_queryset.first() in task.task_managers.all():
+                members = (employee_queryset | task.task_members.all()).distinct()
             else:
-                members = employee
+                members = employee_queryset
             form.fields["employee_id"].queryset = members
     else:
         form.fields["employee_id"].queryset = Employee.objects.none()
@@ -1737,12 +1749,13 @@ def get_tasks_in_timesheet(request):
     form = TimeSheetForm()
     if project_id and project_id != "dynamic_create":
         project = Project.objects.get(id=project_id)
-        employee = request.user.employee_get
+        employee = get_employee_from_user(request.user)
         all_tasks = Task.objects.filter(project=project)
         # ie the employee is a project manager return all tasks
         if (
-            employee in project.managers.all()
-            or employee in project.members.all()
+            can_create_project_records(request.user)
+            or (employee is not None and employee in project.managers.all())
+            or (employee is not None and employee in project.members.all())
             or request.user.has_perm("project.add_timesheet")
         ):
             tasks = all_tasks
@@ -1763,7 +1776,11 @@ def get_tasks_in_timesheet(request):
             tasks = Task.objects.filter(project=project_id, task_members=employee)
         form.fields["task_id"].queryset = tasks
         form.fields["task_id"].choices = list(form.fields["task_id"].choices)
-        if employee in project.managers.all() or request.user.is_superuser:
+        if (
+            can_create_project_records(request.user)
+            or request.user.is_superuser
+            or (employee is not None and employee in project.managers.all())
+        ):
             form.fields["task_id"].choices.append(("dynamic_create", "Dynamic create"))
         task_id = request.GET.get("task_id")
         if task_id:
@@ -1797,8 +1814,9 @@ def time_sheet_creation(request):
         HttpResponse: The rendered HTTP response displaying the form or
         redirecting to a new page after successful time sheet creation.
     """
-    user = request.user.employee_get
-    form = TimeSheetForm(initial={"employee_id": user}, request=request)
+    user = get_employee_from_user(request.user)
+    initial = {"employee_id": user} if user is not None else {}
+    form = TimeSheetForm(initial=initial, request=request)
     # form = TimeSheetForm(initial={"employee_id": user})
     if request.method == "POST":
         form = TimeSheetForm(request.POST, request.FILES, request=request)
@@ -1828,6 +1846,8 @@ def time_sheet_project_creation(request):
         created project ID and name in case of successful creation,
         or the validation errors in case of an invalid form submission.
     """
+    if not can_create_project_records(request.user):
+        return JsonResponse({"errors": "You don't have permission."}, status=403)
     form = ProjectTimeSheetForm()
     if request.method == "POST":
         form = ProjectTimeSheetForm(request.POST, request.FILES)
@@ -1857,6 +1877,8 @@ def time_sheet_task_creation(request):
         created task time sheet's ID and name in case of successful creation,
         or the validation errors in case of an invalid form submission.
     """
+    if not can_create_project_records(request.user):
+        return JsonResponse({"errors": "You don't have permission."}, status=403)
     if request.method == "GET":
         project_id = request.GET["project_id"]
         project = Project.objects.get(id=project_id)
@@ -2149,10 +2171,12 @@ class ProjectNewCreateAPIView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
-    @method_decorator(
-        permission_required("project.add_projectnew", raise_exception=True)
-    )
     def post(self, request):
+        if not can_create_project_records(request.user):
+            return Response(
+                {"error": "You don't have permission"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = ProjectNewCreateSerializer(
             data=request.data, context={"request": request}
         )
@@ -2421,8 +2445,12 @@ class TaskNewAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     # 🔹 CREATE TASK
-    @method_decorator(permission_required("project.add_tasknew", raise_exception=True))
     def post(self, request):
+        if not can_create_project_records(request.user):
+            return Response(
+                {"error": "You don't have permission"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = TaskNewCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -2602,12 +2630,29 @@ class TimeSheetNewAPIView(APIView):
     # 🔹 CREATE TIMESHEET
     # @method_decorator(permission_required("project.add_timesheetnew", raise_exception=True))
     def post(self, request):
-        serializer = TimeSheetNewCreateSerializer(data=request.data)
+        if not can_create_project_records(request.user):
+            return Response(
+                {"error": "You don't have permission"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        data = request.data.copy()
+        employee = get_employee_from_user(request.user)
+        employee_id = data.pop("employee_id", None)
+        if employee is None and (request.user.is_superuser or request.user.is_staff):
+            employee = Employee.objects.filter(id=employee_id).first()
+            if employee is None:
+                return Response(
+                    {
+                        "error": "Admin users without a linked employee must provide a valid employee_id."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        serializer = TimeSheetNewCreateSerializer(data=data)
         serializer.is_valid(raise_exception=True)
 
         # ✅ employee is ALWAYS the logged-in user
-        employee = request.user.employee_get
-
         timesheet = TimeSheetNew.objects.create(
             employee=employee, **serializer.validated_data
         )
