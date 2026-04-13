@@ -6,6 +6,18 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import KeyResult, Meeting, Objective, Question, QuestionTemplate
+from .notifications import (
+    get_performance_notification_actor,
+    notify_bonus_created,
+    notify_bonus_updated,
+    notify_feedback_created,
+    notify_feedback_submitted,
+    notify_feedback_updated,
+    notify_meeting_created,
+    notify_meeting_updated,
+    notify_objective_created,
+    notify_objective_updated,
+)
 from .serializers import (
     KeyResultSerializer,
     MeetingSerializer,
@@ -42,7 +54,10 @@ class ObjectiveAPIView(APIView):
     def post(self, request):
         serializer = ObjectiveSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        objective = serializer.save()
+        notify_objective_created(
+            get_performance_notification_actor(request.user), objective
+        )
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def put(self, request, pk):
@@ -51,7 +66,10 @@ class ObjectiveAPIView(APIView):
             return Response({"error": "Not allowed"}, status=status.HTTP_403_FORBIDDEN)
         serializer = ObjectiveSerializer(obj, data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        objective = serializer.save()
+        notify_objective_updated(
+            get_performance_notification_actor(request.user), objective
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def delete(self, request, pk):
@@ -132,6 +150,7 @@ class MeetingAPIView(APIView):
         serializer = MeetingSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         meeting = serializer.save()
+        notify_meeting_created(get_performance_notification_actor(request.user), meeting)
         return Response(
             {
                 "message": "Meeting created successfully",
@@ -151,6 +170,7 @@ class MeetingAPIView(APIView):
         serializer = MeetingSerializer(obj, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         meeting = serializer.save()
+        notify_meeting_updated(get_performance_notification_actor(request.user), meeting)
         return Response(
             {
                 "message": "Meeting updated successfully",
@@ -318,7 +338,10 @@ class FeedbackAPIView(APIView):
     def post(self, request):
         serializer = FeedbackSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        feedback = serializer.save()
+        notify_feedback_created(
+            get_performance_notification_actor(request.user), feedback
+        )
 
         return Response(
             {
@@ -338,7 +361,10 @@ class FeedbackAPIView(APIView):
 
         serializer = FeedbackSerializer(obj, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        feedback = serializer.save()
+        notify_feedback_updated(
+            get_performance_notification_actor(request.user), feedback
+        )
 
         return Response(
             {
@@ -439,6 +465,9 @@ class SubmitFeedbackAPIView(APIView):
 
         feedback.status = "completed"
         feedback.save()
+        notify_feedback_submitted(
+            get_performance_notification_actor(request.user), feedback
+        )
 
         return Response({"message": "Feedback submitted successfully"}, status=201)
 
@@ -534,7 +563,8 @@ class NewBonusEmployeeAPIView(APIView):
     def post(self, request):
         serializer = NewBonusEmployeeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        bonus = serializer.save()
+        notify_bonus_created(get_performance_notification_actor(request.user), bonus)
 
         return Response(
             {"message": "New bonus created successfully", "data": serializer.data},
@@ -546,7 +576,8 @@ class NewBonusEmployeeAPIView(APIView):
         bonus = get_object_or_404(NewBonusEmployee, pk=pk)
         serializer = NewBonusEmployeeSerializer(bonus, data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        bonus = serializer.save()
+        notify_bonus_updated(get_performance_notification_actor(request.user), bonus)
 
         return Response(
             {"message": "New bonus updated successfully", "data": serializer.data}

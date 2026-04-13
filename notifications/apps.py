@@ -12,5 +12,6 @@ class Config(AppConfig):
         super(Config, self).ready()
         # this is for backwards compability
         import notifications.signals
+        import notifications.model_signals
 
         notifications.notify = notifications.signals.notify

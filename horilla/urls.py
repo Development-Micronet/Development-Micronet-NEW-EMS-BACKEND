@@ -77,6 +77,7 @@ urlpatterns = [
     path("health/", health_check),
     path("api/recruitment/", include("horilla_api.api_urls.recruitment.urls")),
     path("api/leave/", include("leave.urls")),
+    path("api/configuration/", include("configuration.urls")),
     path("api/performance/", include("performance.urls")),  # Employee API endpoints
     path("api/pms/", include("pms.urls")),  # Employee API endpoints
     path("api/project/", include("project.urls")),  # Employee API endpoints

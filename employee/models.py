@@ -16,10 +16,12 @@ from django.contrib.auth.models import Group, Permission, User
 from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
 from django.db import models
+from django.db.models import Q
 from django.db.models.query import QuerySet
 from django.db.models.signals import m2m_changed, post_migrate, post_save
 from django.dispatch import receiver
 from django.templatetags.static import static
+from django.utils import timezone
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy as trans
 from PIL import Image
@@ -564,14 +566,17 @@ class Employee(models.Model):
                     not hasattr(request, "working_employees")
                     or request.working_employees is None
                 ):
-                    today = datetime.now().date()
+                    today = timezone.localdate()
                     yesterday = today - timedelta(days=1)
-                    # Check only today's attendance without clock_out
+                    # Pending create-requests should stay offline until approval.
                     working_employees = Attendance.objects.filter(
                         attendance_date__gte=yesterday,
                         attendance_date__lte=today,
                         attendance_clock_in__isnull=False,
                         attendance_clock_out__isnull=True,
+                    ).exclude(
+                        Q(request_type="create_request")
+                        & Q(attendance_validated=False)
                     ).values_list("employee_id", flat=True)
                     setattr(request, "working_employees", working_employees)
                 working_employees = request.working_employees

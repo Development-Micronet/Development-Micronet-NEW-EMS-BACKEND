@@ -22,8 +22,13 @@ def sync_work_record_from_attendance(instance):
     """
     min_hour_second = strtime_seconds(instance.minimum_hour)
     at_work_second = strtime_seconds(instance.attendance_worked_hour)
+    is_pending_create_request = (
+        instance.request_type == "create_request" and not instance.attendance_validated
+    )
 
-    if not instance.attendance_validated:
+    if is_pending_create_request:
+        status, message = "ABS", _("Absent")
+    elif not instance.attendance_validated:
         status, message = "CONF", _("Validate the attendance")
     elif at_work_second >= min_hour_second:
         status, message = "FDP", _("Present")
@@ -58,6 +63,8 @@ def sync_work_record_from_attendance(instance):
         work_record.day_percentage = (
             1.00 if at_work_second > min_hour_second / 2 else 0.50
         )
+    else:
+        work_record.day_percentage = 0
 
     if work_record.is_leave_record:
         message = (
@@ -66,7 +73,7 @@ def sync_work_record_from_attendance(instance):
 
     # Business rule: once a user has checked in, the work record should appear
     # as present in the attendance work record for both employee and admin flows.
-    if instance.attendance_clock_in:
+    if instance.attendance_clock_in and not is_pending_create_request:
         status = "FDP"
         if work_record.is_leave_record:
             message = _("An approved leave exists")

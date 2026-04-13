@@ -169,6 +169,7 @@ class PayslipNewView(APIView):
     @method_decorator(permission_required("payroll.add_payslipnew"))
     def post(self, request):
         """Create one or more payslips."""
+        from notifications.helpers import send_employee_notification, send_admin_notification
         payload = request.data.copy()
         employee_value = None
 
@@ -230,6 +231,27 @@ class PayslipNewView(APIView):
             )
 
         response_serializer = PayslipNewSerializer(created_payslips, many=True)
+
+        # Notify each employee and all admins on payslip generation
+        for payslip in created_payslips:
+            send_employee_notification(
+                request.user,
+                payslip.employee,
+                verb="Payslip generated",
+                description=f"Your payslip for {payslip.start_date} to {payslip.end_date} has been generated.",
+                target=payslip,
+                level="info",
+                icon="cash",
+            )
+        if created_payslips:
+            send_admin_notification(
+                request.user,
+                verb="Payslip(s) generated",
+                description=f"Payslip(s) generated for {[p.employee for p in created_payslips]}",
+                target=created_payslips[0],
+                level="info",
+                icon="cash",
+            )
 
         if len(created_payslips) == 1:
             return Response(response_serializer.data[0], status=status.HTTP_201_CREATED)

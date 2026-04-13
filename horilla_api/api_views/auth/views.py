@@ -45,90 +45,90 @@ from ...api_serializers.auth.serializers import (
 )
 
 
-# class ResetPasswordPageView(View):
-#     template_name = "auth/reset_password_page.html"
+class ResetPasswordPageView(View):
+    template_name = "auth/reset_password_page.html"
 
-#     def get(self, request, uid, token):
-#         user = ResetPasswordAPIView._get_user_from_uid(uid)
-#         token_error = None
-#         if not user:
-#             token_error = "Invalid or expired reset link."
-#         else:
-#             is_valid_token, token_error = ResetPasswordAPIView.is_valid_reset_token(
-#                 user, uid, token
-#             )
-#             if is_valid_token:
-#                 token_error = None
+    def get(self, request, uid, token):
+        user = ResetPasswordAPIView._get_user_from_uid(uid)
+        token_error = None
+        if not user:
+            token_error = "Invalid or expired reset link."
+        else:
+            is_valid_token, token_error = ResetPasswordAPIView.is_valid_reset_token(
+                user, uid, token
+            )
+            if is_valid_token:
+                token_error = None
 
-#         context = {
-#             **get_email_branding_context(),
-#             "uid": uid,
-#             "token": token,
-#             "token_error": token_error,
-#         }
-#         return render(request, self.template_name, context)
+        context = {
+            **get_email_branding_context(),
+            "uid": uid,
+            "token": token,
+            "token_error": token_error,
+        }
+        return render(request, self.template_name, context)
 
-#     def post(self, request, uid, token):
-#         context = {
-#             **get_email_branding_context(),
-#             "uid": uid,
-#             "token": token,
-#         }
-#         payload = {
-#             "uid": uid,
-#             "token": token,
-#             "new_password": request.POST.get("new_password", ""),
-#             "confirm_password": request.POST.get("confirm_password", ""),
-#         }
-#         serializer = ResetPasswordRequestSerializer(data=payload)
-#         if not serializer.is_valid():
-#             context["error"] = next(iter(serializer.errors.values()))[0]
-#             return render(request, self.template_name, context, status=400)
+    def post(self, request, uid, token):
+        context = {
+            **get_email_branding_context(),
+            "uid": uid,
+            "token": token,
+        }
+        payload = {
+            "uid": uid,
+            "token": token,
+            "new_password": request.POST.get("new_password", ""),
+            "confirm_password": request.POST.get("confirm_password", ""),
+        }
+        serializer = ResetPasswordRequestSerializer(data=payload)
+        if not serializer.is_valid():
+            context["error"] = next(iter(serializer.errors.values()))[0]
+            return render(request, self.template_name, context, status=400)
 
-#         user = ResetPasswordAPIView._get_user_from_uid(uid)
-#         if not user:
-#             context["token_error"] = "Invalid or expired reset link."
-#             return render(request, self.template_name, context, status=400)
+        user = ResetPasswordAPIView._get_user_from_uid(uid)
+        if not user:
+            context["token_error"] = "Invalid or expired reset link."
+            return render(request, self.template_name, context, status=400)
 
-#         is_valid_token, token_error = ResetPasswordAPIView.is_valid_reset_token(
-#             user, uid, token
-#         )
-#         if not is_valid_token:
-#             context["token_error"] = token_error
-#             return render(request, self.template_name, context, status=400)
+        is_valid_token, token_error = ResetPasswordAPIView.is_valid_reset_token(
+            user, uid, token
+        )
+        if not is_valid_token:
+            context["token_error"] = token_error
+            return render(request, self.template_name, context, status=400)
 
-#         cooldown_key = f"password_reset_cooldown_user_{user.pk}"
-#         cooldown_until = cache.get(cooldown_key)
-#         if cooldown_until:
-#             remaining_seconds = int(cooldown_until - timezone.now().timestamp())
-#             if remaining_seconds > 0:
-#                 context["error"] = (
-#                     f"Please wait {remaining_seconds} seconds before resetting password again."
-#                 )
-#                 return render(request, self.template_name, context, status=429)
+        cooldown_key = f"password_reset_cooldown_user_{user.pk}"
+        cooldown_until = cache.get(cooldown_key)
+        if cooldown_until:
+            remaining_seconds = int(cooldown_until - timezone.now().timestamp())
+            if remaining_seconds > 0:
+                context["error"] = (
+                    f"Please wait {remaining_seconds} seconds before resetting password again."
+                )
+                return render(request, self.template_name, context, status=429)
 
-#         new_password = serializer.validated_data["new_password"]
-#         if user.check_password(new_password):
-#             context["error"] = (
-#                 "New password must be different from your current password."
-#             )
-#             return render(request, self.template_name, context, status=400)
+        new_password = serializer.validated_data["new_password"]
+        if user.check_password(new_password):
+            context["error"] = (
+                "New password must be different from your current password."
+            )
+            return render(request, self.template_name, context, status=400)
 
-#         try:
-#             validate_password(new_password, user=user)
-#         except DjangoValidationError as exc:
-#             context["error"] = " ".join(exc.messages)
-#             return render(request, self.template_name, context, status=400)
+        try:
+            validate_password(new_password, user=user)
+        except DjangoValidationError as exc:
+            context["error"] = " ".join(exc.messages)
+            return render(request, self.template_name, context, status=400)
 
-#         user.set_password(new_password)
-#         user.save(update_fields=["password"])
-#         cache.set(
-#             cooldown_key,
-#             timezone.now().timestamp() + ResetPasswordAPIView.COOLDOWN_SECONDS,
-#             timeout=ResetPasswordAPIView.COOLDOWN_SECONDS,
-#         )
-#         context["success"] = "Password reset successfully. You can now sign in."
-#         return render(request, self.template_name, context)
+        user.set_password(new_password)
+        user.save(update_fields=["password"])
+        cache.set(
+            cooldown_key,
+            timezone.now().timestamp() + ResetPasswordAPIView.COOLDOWN_SECONDS,
+            timeout=ResetPasswordAPIView.COOLDOWN_SECONDS,
+        )
+        context["success"] = "Password reset successfully. You can now sign in."
+        return render(request, self.template_name, context)
 
 
 class LoginAPIView(APIView):

@@ -21,7 +21,9 @@ from rest_framework.views import APIView
 
 from base.methods import filtersubordinates, get_key_instances
 from horilla.decorators import hx_request_required, login_required, permission_required
+from notifications.helpers import send_admin_notification, send_employee_notification
 from notifications.signals import notify
+from notifications.realtime import schedule_notification_snapshot_broadcast
 from project.cbv.projects import DynamicProjectCreationFormView
 from project.cbv.tasks import DynamicTaskCreateFormView
 from project.cbv.timesheet import TimeSheetFormView
@@ -203,6 +205,29 @@ def create_project(request):
         form = ProjectForm(request.POST, request.FILES)
         if form.is_valid():
             project = form.save()
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Project created",
+                description=f"Project '{project}' has been created.",
+                target=project,
+                level="success",
+                icon="folder-outline",
+            )
+            for admin in User.objects.filter(is_superuser=True, is_active=True):
+                schedule_notification_snapshot_broadcast(admin)
+            for employee in project.members.all().distinct():
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    employee,
+                    verb="Assigned to project",
+                    description=f"You have been assigned to project '{project}'.",
+                    target=project,
+                    level="info",
+                    icon="folder-open-outline",
+                )
+                schedule_notification_snapshot_broadcast(employee.employee_user_id)
             return JsonResponse({"success": True, "project_id": project.id})
         else:
             return JsonResponse({"success": False, "errors": form.errors}, status=400)
@@ -256,14 +281,42 @@ def change_project_status(request, project_id):
                     request,
                     _(f"{project} status updated to {project.get_status_display()}."),
                 )
+                if project.status == "completed":
+                    employees = (project.managers.all() | project.members.all()).distinct()
+                    for employee in employees:
+                        # NOTIFY
+                        send_employee_notification(
+                            request.user,
+                            employee,
+                            verb="Project completed",
+                            description=f"Project '{project}' has been completed.",
+                            target=project,
+                            level="success",
+                            icon="checkmark-circle-outline",
+                        )
+                        schedule_notification_snapshot_broadcast(employee.employee_user_id)
+                    # NOTIFY
+                    send_admin_notification(
+                        request.user,
+                        verb="Project completed",
+                        description=f"Project '{project}' has been completed.",
+                        target=project,
+                        level="success",
+                        icon="checkmark-circle-outline",
+                    )
+                    for admin in User.objects.filter(is_superuser=True, is_active=True):
+                        schedule_notification_snapshot_broadcast(admin)
                 # Notify all project managers and members
                 employees = (project.managers.all() | project.members.all()).distinct()
                 for employee in employees:
                     try:
-                        notify.send(
+                        send_employee_notification(
                             request.user.employee_get,
-                            recipient=employee.employee_user_id,
+                            employee.employee_user_id,
                             verb=f"The status of the project '{project}' has been changed to {project.get_status_display()}.",
+                            description=f"The status of the project '{project}' has been changed to {project.get_status_display()}.",
+                            target=project,
+                            level="info",
                             verb_ar=f"تم تغيير حالة المشروع '{project}' إلى {project.get_status_display()}.",
                             verb_de=f"Der Status des Projekts '{project}' wurde auf {project.get_status_display()} geändert.",
                             verb_es=f"El estado del proyecto '{project}' ha sido cambiado a {project.get_status_display()}.",
@@ -994,7 +1047,28 @@ class CreateTaskByStageAPIView(APIView):
 
         serializer = TaskSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            task = serializer.save()
+            recipients = list(task.task_members.all()) + list(task.task_managers.all())
+            for employee in {emp.id: emp for emp in recipients}.values():
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    employee,
+                    verb="Assigned to project",
+                    description=f"You have been assigned to task '{task.title}'.",
+                    target=task,
+                    level="info",
+                    icon="checkbox-outline",
+                )
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Task status updated",
+                description=f"Task '{task.title}' was created in project '{project}'.",
+                target=task,
+                level="info",
+                icon="checkbox-outline",
+            )
             return Response(
                 {
                     "success": True,
@@ -1028,7 +1102,28 @@ class CreateTaskInProjectAPIView(APIView):
 
         serializer = TaskSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
+            task = serializer.save()
+            recipients = list(task.task_members.all()) + list(task.task_managers.all())
+            for employee in {emp.id: emp for emp in recipients}.values():
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    employee,
+                    verb="Assigned to project",
+                    description=f"You have been assigned to task '{task.title}'.",
+                    target=task,
+                    level="info",
+                    icon="checkbox-outline",
+                )
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Task status updated",
+                description=f"Task '{task.title}' was created in project '{project}'.",
+                target=task,
+                level="info",
+                icon="checkbox-outline",
+            )
             return Response(
                 {
                     "success": True,
@@ -1348,6 +1443,15 @@ def update_project_task_status(request, task_id):
 
     task.status = status
     task.save()
+    # NOTIFY
+    send_admin_notification(
+        request.user,
+        verb="Task status updated",
+        description=f"Task '{task}' status changed to {task.get_status_display()}.",
+        target=task,
+        level="success" if task.status == "completed" else "info",
+        icon="checkmark-done-outline" if task.status == "completed" else "sync-outline",
+    )
     messages.success(request, _("Task status has been updated successfully"))
     return HttpResponse("<script>$('#reloadMessagesButton').click();</script>")
 
@@ -1712,8 +1816,8 @@ def get_members(request):
     )
     if project_id and task_id:
         if task_id != "dynamic_create" and project_id != "dynamic_create":
-            project = Project.objects.filter(id=project_id).first()
-            task = Task.objects.filter(id=task_id).first()
+            project = Project.objects.get(id=project_id)
+            task = Task.objects.get(id=task_id)
             if request.user.is_superuser or request.user.is_staff:
                 members = Employee.objects.all()
             elif employee_queryset.first() in project.managers.all():

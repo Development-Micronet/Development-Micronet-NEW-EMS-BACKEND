@@ -25,6 +25,7 @@ from horilla.decorators import (
     login_required,
     permission_required,
 )
+from notifications.helpers import send_admin_notification
 from recruitment.filters import SurveyFilter
 from recruitment.forms import (
     AddQuestionForm,
@@ -130,6 +131,18 @@ def candidate_survey(request):
             email=candidate.email, recruitment_id=candidate.recruitment_id
         ).exists():
             candidate.save()
+            # NOTIFY
+            send_admin_notification(
+                candidate,
+                verb="Application received",
+                description=(
+                    f"A new application was received from {candidate.name} for "
+                    f"'{candidate.recruitment_id}'."
+                ),
+                target=candidate,
+                level="info",
+                icon="document-text-outline",
+            )
         else:
             candidate = Candidate.objects.filter(
                 email=candidate.email, recruitment_id=candidate.recruitment_id
@@ -378,6 +391,18 @@ def application_form(request):
                 candidate_obj.stage_id = stages.order_by("sequence").first()
             messages.success(request, _("Application saved."))
             candidate_obj.save()  # 945
+            # NOTIFY
+            send_admin_notification(
+                candidate_obj,
+                verb="Application received",
+                description=(
+                    f"A new application from {candidate_obj.name} was received for "
+                    f"{recruitment_obj}."
+                ),
+                target=candidate_obj,
+                level="info",
+                icon="document-text-outline",
+            )
             request.session["candidate"] = serializers.serialize(
                 "json", [candidate_obj]
             )

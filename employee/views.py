@@ -127,6 +127,7 @@ from horilla_documents.forms import (
     DocumentUpdateForm,
 )
 from horilla_documents.models import Document, DocumentRequest
+from notifications.helpers import send_admin_notification, send_employee_notification
 from notifications.signals import notify
 
 
@@ -554,17 +555,21 @@ def document_request_create(request):
             messages.success(request, _("Document request created successfully"))
             employees = [user.employee_user_id for user in form.employee_id.all()]
 
-            notify.send(
-                request.user.employee_get,
-                recipient=employees,
-                verb=f"{request.user.employee_get} requested a document.",
-                verb_ar=f"Ø·Ù„Ø¨ {request.user.employee_get} Ù…Ø³ØªÙ†Ø¯Ø§Ù‹.",
-                verb_de=f"{request.user.employee_get} hat ein Dokument angefordert.",
-                verb_es=f"{request.user.employee_get} solicitÃ³ un documento.",
-                verb_fr=f"{request.user.employee_get} a demandÃ© un document.",
-                redirect=reverse("employee-profile"),
-                icon="chatbox-ellipses",
-            )
+            for emp_user in employees:
+                send_employee_notification(
+                    request.user.employee_get,
+                    emp_user,
+                    verb=f"{request.user.employee_get} requested a document.",
+                    description=f"{request.user.employee_get} requested a document.",
+                    target=None,
+                    level="info",
+                    verb_ar=f"Ø·Ù„Ø¨ {request.user.employee_get} Ù…Ø³ØªÙ†Ø¯Ø§Ù‹.",
+                    verb_de=f"{request.user.employee_get} hat ein Dokument angefordert.",
+                    verb_es=f"{request.user.employee_get} solicitÃ³ un documento.",
+                    verb_fr=f"{request.user.employee_get} a demandÃ© un document.",
+                    redirect=reverse("employee-profile"),
+                    icon="chatbox-ellipses",
+                )
             return HttpResponse("<script>window.location.reload();</script>")
 
     context = {
@@ -756,10 +761,13 @@ def file_upload(request, id):
             form.save()
             messages.success(request, _("Document uploaded successfully"))
             try:
-                notify.send(
+                send_employee_notification(
                     request.user.employee_get,
-                    recipient=request.user.employee_get.get_reporting_manager().employee_user_id,
+                    request.user.employee_get.get_reporting_manager().employee_user_id,
                     verb=f"{request.user.employee_get} uploaded a document",
+                    description=f"{request.user.employee_get} uploaded a document",
+                    target=document_item,
+                    level="info",
                     verb_ar=f"Ù‚Ø§Ù… {request.user.employee_get} Ø¨ØªØ­Ù…ÙŠÙ„ Ù…Ø³ØªÙ†Ø¯",
                     verb_de=f"{request.user.employee_get} hat ein Dokument hochgeladen",
                     verb_es=f"{request.user.employee_get} subiÃ³ un documento",
@@ -861,6 +869,17 @@ def document_approve(request, id):
     if document_obj.document:
         document_obj.status = "approved"
         document_obj.save()
+        # NOTIFY
+        send_employee_notification(
+            request.user,
+            document_obj.employee_id,
+            verb="Document verified",
+            description=f"Your document '{document_obj.title}' has been verified.",
+            target=document_obj,
+            level="success",
+            icon="checkmark-circle-outline",
+            redirect=reverse("employee-profile"),
+        )
         messages.success(request, _("Document request approved"))
     else:
         messages.error(request, _("No document uploaded"))
@@ -909,6 +928,17 @@ def document_reject(request, id):
                 test = form.save()
                 document_obj.status = "rejected"
                 document_obj.save()
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    document_obj.employee_id,
+                    verb="Document rejected",
+                    description=f"Your document '{document_obj.title}' has been rejected.",
+                    target=document_obj,
+                    level="error",
+                    icon="close-circle-outline",
+                    redirect=reverse("employee-profile"),
+                )
                 messages.error(request, _("Document request rejected"))
 
                 return HttpResponse("<script>window.location.reload();</script>")
@@ -1485,6 +1515,10 @@ def employee_view_update(request, obj_id, **kwargs):
                 instance = EmployeeWorkInformation.objects.filter(
                     employee_id=employee
                 ).first()
+                previous_department = getattr(instance, "department_id", None)
+                previous_company = getattr(instance, "company_id", None)
+                previous_job_position = getattr(instance, "job_position_id", None)
+                previous_employee_type = getattr(instance, "employee_type_id", None)
                 work_form = EmployeeWorkInformationUpdateForm(
                     request.POST, instance=instance
                 )
@@ -1493,6 +1527,98 @@ def employee_view_update(request, obj_id, **kwargs):
                     instance.employee_id = employee
                     instance.save()
                     instance.tags.set(request.POST.getlist("tags"))
+                    if request.user == employee.employee_user_id:
+                        # NOTIFY
+                        send_admin_notification(
+                            request.user,
+                            verb="Profile updated by employee",
+                            description=f"{employee} updated their work profile details.",
+                            target=employee,
+                            level="info",
+                            icon="create-outline",
+                            redirect=reverse("employee-view"),
+                        )
+                    else:
+                        # NOTIFY
+                        send_employee_notification(
+                            request.user,
+                            employee,
+                            verb="Profile updated by admin",
+                            description="Your profile was updated by an administrator.",
+                            target=employee,
+                            level="info",
+                            icon="create-outline",
+                            redirect=reverse("employee-profile"),
+                        )
+                    if (
+                        previous_department != instance.department_id
+                        or previous_company != instance.company_id
+                    ):
+                        # NOTIFY
+                        send_employee_notification(
+                            request.user,
+                            employee,
+                            verb="Employee transferred",
+                            description="Your department or company assignment has been updated.",
+                            target=instance,
+                            level="info",
+                            icon="swap-horizontal-outline",
+                            redirect=reverse("employee-profile"),
+                        )
+                        # NOTIFY
+                        send_admin_notification(
+                            request.user,
+                            verb="Employee transferred",
+                            description=f"{employee} was transferred to a new assignment.",
+                            target=instance,
+                            level="info",
+                            icon="swap-horizontal-outline",
+                            redirect=reverse("employee-view"),
+                        )
+                    if previous_job_position != instance.job_position_id:
+                        # NOTIFY
+                        send_employee_notification(
+                            request.user,
+                            employee,
+                            verb="Employee promoted",
+                            description="Your job position has been updated.",
+                            target=instance,
+                            level="success",
+                            icon="trending-up-outline",
+                            redirect=reverse("employee-profile"),
+                        )
+                        # NOTIFY
+                        send_admin_notification(
+                            request.user,
+                            verb="Employee promoted",
+                            description=f"{employee} was moved to a new job position.",
+                            target=instance,
+                            level="info",
+                            icon="trending-up-outline",
+                            redirect=reverse("employee-view"),
+                        )
+                    if previous_employee_type != instance.employee_type_id:
+                        # NOTIFY
+                        send_employee_notification(
+                            request.user,
+                            employee,
+                            verb="Employment status changed",
+                            description="Your employment type has been updated.",
+                            target=instance,
+                            level="info",
+                            icon="briefcase-outline",
+                            redirect=reverse("employee-profile"),
+                        )
+                        # NOTIFY
+                        send_admin_notification(
+                            request.user,
+                            verb="Employment status changed",
+                            description=f"{employee}'s employment type was updated.",
+                            target=instance,
+                            level="info",
+                            icon="briefcase-outline",
+                            redirect=reverse("employee-view"),
+                        )
                     notify.send(
                         request.user.employee_get,
                         recipient=instance.employee_id.employee_user_id,
@@ -1662,6 +1788,28 @@ def employee_create_update_personal_info(request, obj_id=None):
     if form.is_valid():
         form.save()
         if obj_id is None:
+            created_employee = form.instance
+            # NOTIFY
+            send_employee_notification(
+                request.user,
+                created_employee,
+                verb="Employee profile created",
+                description="Your employee profile has been created successfully.",
+                target=created_employee,
+                level="success",
+                icon="person-circle-outline",
+                redirect=reverse("employee-profile"),
+            )
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Employee profile created",
+                description=f"A new employee profile was created for {created_employee}.",
+                target=created_employee,
+                level="info",
+                icon="person-circle-outline",
+                redirect=reverse("employee-view"),
+            )
             messages.success(request, _("New Employee Added."))
             form = EmployeeForm(request.POST, instance=form.instance)
             work_form = EmployeeWorkInformationForm(
@@ -1932,6 +2080,17 @@ def employee_update(request, obj_id):
             form = EmployeeForm(request.POST, request.FILES, instance=employee)
             if form.is_valid():
                 form.save()
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    employee,
+                    verb="Profile updated by admin",
+                    description="Your profile was updated by an administrator.",
+                    target=employee,
+                    level="info",
+                    icon="create-outline",
+                    redirect=reverse("employee-profile"),
+                )
                 messages.success(request, _("Employee updated."))
     return render(
         request,
@@ -2799,8 +2958,12 @@ def get_employees_birthday(request):
     """
     employees = birthday()
     default_avatar_url = "https://ui-avatars.com/api/?background=random&name="
-    birthdays = [
-        {
+    birthdays = []
+    from notifications.signals import notify
+    from django.contrib.auth.models import User
+
+    for emp in employees:
+        birthdays.append({
             "profile": (
                 emp.get_avatar()
                 if hasattr(emp, "get_avatar")
@@ -2809,10 +2972,10 @@ def get_employees_birthday(request):
             "name": f"{emp.employee_first_name} {emp.employee_last_name}",
             "dob": emp.dob.strftime("%d %b"),
             "daysUntilBirthday": (
-                _("Today")
+                _( "Today")
                 if emp.days_until_birthday == 0
                 else (
-                    _("Tomorrow")
+                    _( "Tomorrow")
                     if emp.days_until_birthday == 1
                     else f"In {emp.days_until_birthday} Days"
                 )
@@ -2823,9 +2986,17 @@ def get_employees_birthday(request):
             "job_position": (
                 emp.get_job_position().job_position if emp.get_job_position() else ""
             ),
-        }
-        for emp in employees
-    ]
+        })
+        # Send notification to all users if today is the employee's birthday
+        if hasattr(emp, "days_until_birthday") and emp.days_until_birthday == 0:
+            notify.send(
+                emp,
+                recipient=User.objects.filter(is_active=True),
+                verb=f"Today is {emp.employee_first_name} {emp.employee_last_name}'s birthday!",
+                description="Wish them a happy birthday!",
+                icon="gift",
+                redirect=reverse("employee-view-individual", kwargs={"obj_id": emp.id}),
+            )
     return render(
         request, "dashboard/birthdays_container.html", {"birthdays": birthdays}
     )

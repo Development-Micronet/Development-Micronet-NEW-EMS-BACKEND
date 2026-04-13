@@ -415,13 +415,26 @@ class TimeSheetFormView(HorillaFormView):
         return context
 
     def form_valid(self, form: TimeSheetForm) -> HttpResponse:
+        from notifications.helpers import send_admin_notification
         if form.is_valid():
-            if form.instance.pk:
+            is_update = bool(form.instance.pk)
+            if is_update:
                 message = _(f"{self.form.instance} Updated")
             else:
                 message = _("New time sheet created")
-            form.save()
+            timesheet = form.save()
             messages.success(self.request, _(message))
+            # Notify admin users on timesheet creation
+            if not is_update:
+                send_admin_notification(
+                    self.request.user,
+                    verb="Timesheet created",
+                    description=f"A new timesheet '{timesheet}' was created.",
+                    target=timesheet,
+                    level="info",
+                    icon="calendar",
+                    redirect=reverse("task-timesheet-list"),
+                )
             return self.HttpResponse()
         return super().form_valid(form)
 

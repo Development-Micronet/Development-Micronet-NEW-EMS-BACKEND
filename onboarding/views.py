@@ -47,6 +47,7 @@ from employee.models import Employee, EmployeeBankDetails, EmployeeWorkInformati
 from horilla.decorators import hx_request_required, login_required, permission_required
 from horilla.group_by import group_by_queryset as general_group_by
 from horilla_documents.models import Document
+from notifications.helpers import send_admin_notification, send_employee_notification
 from notifications.signals import notify
 from onboarding.decorators import (
     all_manager_can_enter,
@@ -1299,6 +1300,50 @@ def candidate_task_update(request, taskId):
             )
     candidate_task.status = status
     candidate_task.save()
+    if status == "done":
+        # NOTIFY
+        send_admin_notification(
+            request.user,
+            verb="Onboarding task completed",
+            description=(
+                f"Onboarding task '{candidate_task.onboarding_task_id}' was completed "
+                f"for {candidate_task.candidate_id}."
+            ),
+            target=candidate_task,
+            level="success",
+            icon="checkmark-done-outline",
+            redirect=reverse("onboarding-view"),
+        )
+        remaining_tasks = CandidateTask.objects.filter(
+            candidate_id=candidate_task.candidate_id
+        ).exclude(status="done")
+        if not remaining_tasks.exists():
+            employee = candidate_task.candidate_id.converted_employee_id
+            if employee is not None:
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    employee,
+                    verb="All onboarding tasks completed",
+                    description="All of your onboarding tasks have been completed.",
+                    target=candidate_task.candidate_id,
+                    level="success",
+                    icon="ribbon-outline",
+                    redirect=reverse("onboarding-view"),
+                )
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="All onboarding tasks completed",
+                description=(
+                    f"All onboarding tasks have been completed for "
+                    f"{candidate_task.candidate_id}."
+                ),
+                target=candidate_task.candidate_id,
+                level="success",
+                icon="ribbon-outline",
+                redirect=reverse("onboarding-view"),
+            )
     users = [
         employee.employee_user_id
         for employee in candidate_task.onboarding_task_id.employee_id.all()
@@ -1382,6 +1427,21 @@ def assign_task(request, task_id):
     )
     cand_task.save()
     onboarding_task.candidates.add(candidate)
+    if created and candidate.converted_employee_id is not None:
+        # NOTIFY
+        send_employee_notification(
+            request.user,
+            candidate.converted_employee_id,
+            verb="Onboarding task assigned",
+            description=(
+                f"You have been assigned the onboarding task "
+                f"'{onboarding_task.task_title}'."
+            ),
+            target=cand_task,
+            level="info",
+            icon="list-outline",
+            redirect=reverse("onboarding-view"),
+        )
     return render(
         request,
         "onboarding/candidate_task.html",
@@ -1843,6 +1903,50 @@ def change_task_status(request):
     if status in VALID_TASK_STATUSES:
         candidate_task.status = status
         candidate_task.save()
+        if status == "done":
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Onboarding task completed",
+                description=(
+                    f"Onboarding task '{candidate_task.onboarding_task_id}' was "
+                    f"completed for {candidate_task.candidate_id}."
+                ),
+                target=candidate_task.onboarding_task_id,
+                level="success",
+                icon="checkmark-done-outline",
+                redirect=reverse("onboarding-view"),
+            )
+            remaining_tasks = CandidateTask.objects.filter(
+                candidate_id=candidate_task.candidate_id
+            ).exclude(status="done")
+            if not remaining_tasks.exists():
+                employee = candidate_task.candidate_id.converted_employee_id
+                if employee is not None:
+                    # NOTIFY
+                    send_employee_notification(
+                        request.user,
+                        employee,
+                        verb="All onboarding tasks completed",
+                        description="All of your onboarding tasks have been completed.",
+                        target=candidate_task.candidate_id,
+                        level="success",
+                        icon="ribbon-outline",
+                        redirect=reverse("onboarding-view"),
+                    )
+                # NOTIFY
+                send_admin_notification(
+                    request.user,
+                    verb="All onboarding tasks completed",
+                    description=(
+                        f"All onboarding tasks have been completed for "
+                        f"{candidate_task.candidate_id}."
+                    ),
+                    target=candidate_task.candidate_id,
+                    level="success",
+                    icon="ribbon-outline",
+                    redirect=reverse("onboarding-view"),
+                )
     return HttpResponse("Success")
 
 
@@ -1869,6 +1973,51 @@ def update_offer_letter_status(request):
     if status in ["not_sent", "sent", "accepted", "rejected", "joined"]:
         candidate.offer_letter_status = status
         candidate.save()
+        if status == "sent":
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Offer letter generated",
+                description=f"Offer letter has been generated for {candidate}.",
+                target=candidate,
+                level="info",
+                icon="document-text-outline",
+                redirect="/onboarding/candidates-view/",
+            )
+            if candidate.converted_employee_id is not None:
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    candidate.converted_employee_id,
+                    verb="Offer letter generated",
+                    description="Your offer letter has been generated.",
+                    target=candidate,
+                    level="success",
+                    icon="document-text-outline",
+                    redirect="/onboarding/candidates-view/",
+                )
+        elif status == "accepted":
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Offer accepted",
+                description=f"{candidate} accepted the offer letter.",
+                target=candidate,
+                level="success",
+                icon="checkmark-circle-outline",
+                redirect="/onboarding/candidates-view/",
+            )
+        elif status == "rejected":
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Offer rejected",
+                description=f"{candidate} rejected the offer letter.",
+                target=candidate,
+                level="warning",
+                icon="close-circle-outline",
+                redirect="/onboarding/candidates-view/",
+            )
     messages.success(request, "Status of offer letter updated successfully")
     url = "/onboarding/candidates-view/"
     return HttpResponse(
@@ -1897,7 +2046,31 @@ def add_to_rejected_candidates(request):
     if request.method == "POST":
         form = RejectedCandidateForm(request.POST, instance=instance)
         if form.is_valid():
-            form.save()
+            rejected_candidate = form.save()
+            if rejected_candidate.candidate_id.converted_employee_id is not None:
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    rejected_candidate.candidate_id.converted_employee_id,
+                    verb="Candidate rejected",
+                    description="Your application has been marked as rejected.",
+                    target=rejected_candidate,
+                    level="info",
+                    icon="close-circle-outline",
+                    redirect="/onboarding/candidates-view/",
+                )
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Candidate rejected",
+                description=(
+                    f"{rejected_candidate.candidate_id} was added to rejected candidates."
+                ),
+                target=rejected_candidate,
+                level="info",
+                icon="close-circle-outline",
+                redirect="/onboarding/candidates-view/",
+            )
             form = RejectedCandidateForm()
             messages.success(request, "Candidate reject reason saved")
             return HttpResponse("<script>window.location.reload()</script>")
@@ -1988,6 +2161,28 @@ def offer_letter_bulk_status_update(request):
             if candidate.offer_letter_status != status:
                 candidate.offer_letter_status = status
                 candidate.save()
+                if status == "accepted":
+                    # NOTIFY
+                    send_admin_notification(
+                        request.user,
+                        verb="Offer accepted",
+                        description=f"{candidate} accepted the offer letter.",
+                        target=candidate,
+                        level="success",
+                        icon="checkmark-circle-outline",
+                        redirect="/onboarding/candidates-view/",
+                    )
+                elif status == "rejected":
+                    # NOTIFY
+                    send_admin_notification(
+                        request.user,
+                        verb="Offer rejected",
+                        description=f"{candidate} rejected the offer letter.",
+                        target=candidate,
+                        level="warning",
+                        icon="close-circle-outline",
+                        redirect="/onboarding/candidates-view/",
+                    )
                 messages.success(request, "offer letter status updated successfully")
             else:
                 messages.error(request, "Status already in {} status".format(status))

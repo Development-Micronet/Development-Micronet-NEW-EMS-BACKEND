@@ -322,8 +322,10 @@ class ProjectFormView(HorillaFormView):
         return context
 
     def form_valid(self, form: ProjectForm) -> HttpResponse:
+        from notifications.helpers import send_admin_notification
         if form.is_valid():
-            if form.instance.pk:
+            is_update = bool(form.instance.pk)
+            if is_update:
                 message = _(f"{self.form.instance} Updated")
                 HTTP_REFERER = self.request.META.get("HTTP_REFERER", None)
                 if HTTP_REFERER and "task-view/" in HTTP_REFERER:
@@ -334,8 +336,19 @@ class ProjectFormView(HorillaFormView):
                     )
             else:
                 message = _("New project created")
-            form.save()
+            project = form.save()
             messages.success(self.request, _(message))
+            # Notify admin users on project creation
+            if not is_update:
+                send_admin_notification(
+                    self.request.user,
+                    verb="Project created",
+                    description=f"A new project '{project.title}' was created.",
+                    target=project,
+                    level="info",
+                    icon="briefcase",
+                    redirect=reverse("project-detailed-view", kwargs={"pk": project.pk}),
+                )
             return self.HttpResponse()
         return super().form_valid(form)
 

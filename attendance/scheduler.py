@@ -49,16 +49,16 @@ def create_work_record():
 
 
 def _parse_auto_checkout_time():
-    raw_value = getattr(settings, "AUTO_CHECK_OUT_TIME", "18:30")
+    raw_value = getattr(settings, "AUTO_CHECK_OUT_TIME", "18:45")
     for fmt in ("%H:%M", "%H:%M:%S"):
         try:
             return datetime.datetime.strptime(raw_value, fmt).time()
         except ValueError:
             continue
     logger.warning(
-        "Invalid AUTO_CHECK_OUT_TIME '%s'. Falling back to 18:30.", raw_value
+        "Invalid AUTO_CHECK_OUT_TIME '%s'. Falling back to 18:45.", raw_value
     )
-    return datetime.time(18, 30)
+    return datetime.time(18, 45)
 
 
 def auto_checkout_employees():
@@ -119,10 +119,13 @@ if not any(
         id="create_daily_work_record",
         replace_existing=True,
     )
+
+    # Run auto checkout exactly at 18:45 (6:45 PM) every day
     scheduler.add_job(
         auto_checkout_employees,
-        "interval",
-        minutes=1,
+        "cron",
+        hour=18,
+        minute=45,
         misfire_grace_time=300,
         id="auto_checkout_after_configured_time",
         replace_existing=True,

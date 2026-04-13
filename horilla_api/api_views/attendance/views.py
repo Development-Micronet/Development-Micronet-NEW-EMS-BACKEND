@@ -274,6 +274,12 @@ from attendance.models import (
     BatchAttendance,
     EmployeeShiftDay,
 )
+from attendance.methods.notifications import (
+    get_attendance_request_notification_actor,
+    notify_attendance_request_approved,
+    notify_attendance_request_created,
+    notify_attendance_request_rejected,
+)
 from attendance.methods.utils import format_time, strtime_seconds
 from attendance.views.clock_in_out import *
 from attendance.signals import (
@@ -1306,7 +1312,7 @@ class AttendanceRequestView(APIView):
         normalized_data = normalize_attendance_request_payload(
             request.data, request.user
         )
-        form = NewRequestForm(data=normalized_data)
+        form = NewRequestForm(data=normalized_data, request=request)
         if "employee_id" in form.fields:
             form.fields["employee_id"].queryset = Employee.objects.entire()
         if form.is_valid():
@@ -1317,6 +1323,20 @@ class AttendanceRequestView(APIView):
 
             if form.new_instance is not None:
                 form.new_instance.save()
+                notify_attendance_request_created(
+                    get_attendance_request_notification_actor(request.user),
+                    form.new_instance,
+                )
+            else:
+                attendance = Attendance.objects.filter(
+                    employee_id=form.cleaned_data.get("employee_id"),
+                    attendance_date=form.cleaned_data.get("attendance_date"),
+                ).first()
+                if attendance is not None:
+                    notify_attendance_request_created(
+                        get_attendance_request_notification_actor(request.user),
+                        attendance,
+                    )
 
             return Response(form.data, status=200)
         employee_id = normalized_data.get("employee_id")
@@ -1357,6 +1377,11 @@ class AttendanceRequestView(APIView):
                 instance.is_validate_request_approved = False
                 instance.is_validate_request = True
                 instance.save()
+                attendance = instance
+            notify_attendance_request_created(
+                get_attendance_request_notification_actor(request.user),
+                attendance,
+            )
             return Response(form.data, status=200)
         return Response(form.errors, status=400)
 
@@ -1427,6 +1452,10 @@ class AttendanceRequestApproveView(APIView):
                     )
         except Exception as E:
             return Response({"error": str(E)}, status=400)
+        notify_attendance_request_approved(
+            get_attendance_request_notification_actor(request.user),
+            attendance,
+        )
         return Response({"status": "approved"}, status=200)
 
 
@@ -1459,6 +1488,10 @@ class AttendanceRequestCancelView(APIView):
                     attendance.delete()
         except Exception as E:
             return Response({"error": str(E)}, status=400)
+        notify_attendance_request_rejected(
+            get_attendance_request_notification_actor(request.user),
+            attendance,
+        )
         return Response({"status": "success"}, status=200)
 
 

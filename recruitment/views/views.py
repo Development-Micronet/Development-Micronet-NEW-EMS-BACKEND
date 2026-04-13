@@ -64,6 +64,7 @@ from horilla.decorators import (
 )
 from horilla.group_by import group_by_queryset
 from horilla_documents.models import Document
+from notifications.helpers import send_admin_notification, send_employee_notification
 from notifications.signals import notify
 from recruitment.auth import CandidateAuthenticationBackend
 from recruitment.decorators import (
@@ -263,6 +264,16 @@ def recruitment(request):
                 for sur in survey.recruitmentsurvey_set.all():
                     sur.recruitment_ids.add(recruitment_obj)
             messages.success(request, _("Recruitment added."))
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Job post created",
+                description=f"A new job post '{recruitment_obj}' has been created.",
+                target=recruitment_obj,
+                level="success",
+                icon="briefcase-outline",
+                redirect=reverse("pipeline"),
+            )
             with contextlib.suppress(Exception):
                 managers = recruitment_obj.recruitment_managers.select_related(
                     "employee_user_id"
@@ -899,6 +910,19 @@ def candidate_stage_update(request, cand_id):
         candidate_obj.schedule_date = schedule_date
         candidate_obj.start_onboard = False
         candidate_obj.save()
+        if stage_obj.stage_type == "interview":
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Candidate shortlisted",
+                description=(
+                    f"{candidate_obj} was shortlisted into the '{stage_obj.stage}' stage."
+                ),
+                target=candidate_obj,
+                level="info",
+                icon="person-add-outline",
+                redirect=reverse("pipeline"),
+            )
         with contextlib.suppress(Exception):
             managers = stage_obj.stage_managers.select_related("employee_user_id")
             users = [employee.employee_user_id for employee in managers]
@@ -1846,11 +1870,39 @@ def interview_schedule(request, cand_id):
     if request.method == "POST":
         form = ScheduleInterviewForm(request.POST)
         if form.is_valid():
-            form.save()
+            interview = form.save()
             emp_ids = form.cleaned_data["employee_id"]
             cand_id = form.cleaned_data["candidate_id"]
             interview_date = form.cleaned_data["interview_date"]
             interview_time = form.cleaned_data["interview_time"]
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Interview scheduled",
+                description=(
+                    f"Interview for {cand_id.name} was scheduled on "
+                    f"{interview_date} at {interview_time}."
+                ),
+                target=interview,
+                level="info",
+                icon="calendar-outline",
+                redirect=reverse("interview-view"),
+            )
+            if cand_id.converted_employee_id is not None:
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    cand_id.converted_employee_id,
+                    verb="Interview scheduled",
+                    description=(
+                        f"Your interview is scheduled on {interview_date} at "
+                        f"{interview_time}."
+                    ),
+                    target=interview,
+                    level="info",
+                    icon="calendar-outline",
+                    redirect=reverse("interview-view"),
+                )
             users = [employee.employee_user_id for employee in emp_ids]
             notify.send(
                 request.user.employee_get,
@@ -1885,11 +1937,39 @@ def create_interview_schedule(request):
     if request.method == "POST":
         form = ScheduleInterviewForm(request.POST)
         if form.is_valid():
-            form.save()
+            interview = form.save()
             emp_ids = form.cleaned_data["employee_id"]
             cand_id = form.cleaned_data["candidate_id"]
             interview_date = form.cleaned_data["interview_date"]
             interview_time = form.cleaned_data["interview_time"]
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Interview scheduled",
+                description=(
+                    f"Interview for {cand_id.name} was scheduled on "
+                    f"{interview_date} at {interview_time}."
+                ),
+                target=interview,
+                level="info",
+                icon="calendar-outline",
+                redirect=reverse("interview-view"),
+            )
+            if cand_id.converted_employee_id is not None:
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    cand_id.converted_employee_id,
+                    verb="Interview scheduled",
+                    description=(
+                        f"Your interview is scheduled on {interview_date} at "
+                        f"{interview_time}."
+                    ),
+                    target=interview,
+                    level="info",
+                    icon="calendar-outline",
+                    redirect=reverse("interview-view"),
+                )
             users = [employee.employee_user_id for employee in emp_ids]
             notify.send(
                 request.user.employee_get,
@@ -1958,7 +2038,35 @@ def interview_edit(request, interview_id):
             cand_id = form.cleaned_data["candidate_id"]
             interview_date = form.cleaned_data["interview_date"]
             interview_time = form.cleaned_data["interview_time"]
-            form.save()
+            interview = form.save()
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Interview scheduled",
+                description=(
+                    f"Interview for {cand_id.name} was scheduled on "
+                    f"{interview_date} at {interview_time}."
+                ),
+                target=interview,
+                level="info",
+                icon="calendar-outline",
+                redirect=reverse("interview-view"),
+            )
+            if cand_id.converted_employee_id is not None:
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    cand_id.converted_employee_id,
+                    verb="Interview scheduled",
+                    description=(
+                        f"Your interview schedule was updated to {interview_date} "
+                        f"at {interview_time}."
+                    ),
+                    target=interview,
+                    level="info",
+                    icon="calendar-outline",
+                    redirect=reverse("interview-view"),
+                )
             users = [employee.employee_user_id for employee in emp_ids]
             notify.send(
                 request.user.employee_get,
@@ -2156,8 +2264,20 @@ def create_candidate_rating(request, cand_id):
     candidate = Candidate.objects.get(id=cand_id)
     employee_id = request.user.employee_get
     rating = request.POST.get("rating")
-    CandidateRating.objects.create(
+    rating_obj = CandidateRating.objects.create(
         candidate_id=candidate, rating=rating, employee_id=employee_id
+    )
+    # NOTIFY
+    send_admin_notification(
+        request.user,
+        verb="Interview feedback submitted",
+        description=(
+            f"{employee_id} submitted interview feedback for candidate {candidate}."
+        ),
+        target=rating_obj,
+        level="info",
+        icon="chatbubble-ellipses-outline",
+        redirect=reverse("pipeline"),
     )
     return redirect(recruitment_pipeline)
 
@@ -2629,6 +2749,18 @@ def update_candidate_rating(request, cand_id):
     rate = CandidateRating.objects.get(candidate_id=candidate, employee_id=employee_id)
     rate.rating = int(rating)
     rate.save()
+    # NOTIFY
+    send_admin_notification(
+        request.user,
+        verb="Interview feedback submitted",
+        description=(
+            f"{employee_id} updated interview feedback for candidate {candidate}."
+        ),
+        target=rate,
+        level="info",
+        icon="chatbubble-ellipses-outline",
+        redirect=reverse("pipeline"),
+    )
     return redirect(recruitment_pipeline)
 
 

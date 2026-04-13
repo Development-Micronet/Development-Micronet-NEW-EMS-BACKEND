@@ -428,16 +428,31 @@ class TaskCreateForm(HorillaFormView):
         return context
 
     def form_valid(self, form: TaskAllForm) -> HttpResponse:
+        from notifications.helpers import send_employee_notification
         stage_id = self.kwargs.get("stage_id")
         if form.is_valid():
-            if form.instance.pk:
+            is_update = bool(form.instance.pk)
+            if is_update:
                 message = _(f"{self.form.instance} Updated")
             else:
                 message = _("New Task created")
-            form.save()
+            task = form.save()
             messages.success(self.request, _(message))
+            # Notify assigned task managers on assignment (creation only)
+            if not is_update:
+                for manager in task.task_managers.all():
+                    send_employee_notification(
+                        self.request.user,
+                        manager,
+                        verb="Task assigned",
+                        description=f"You have been assigned as manager for task '{task.title}'.",
+                        target=task,
+                        level="info",
+                        icon="clipboard",
+                        redirect=reverse("task-view", kwargs={"project_id": task.project.pk}),
+                    )
             if stage_id or self.request.GET.get("project_task"):
-                return HttpResponse("<script>location.reload();</script>")
+                return HttpResponse("<script>window.location.reload();</script>")
             return self.HttpResponse("<script>$('#taskFilterButton').click();</script>")
         return super().form_valid(form)
 

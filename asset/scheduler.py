@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from django.urls import reverse
 
+from notifications.helpers import send_admin_notification
 from notifications.signals import notify
 
 
@@ -52,6 +53,20 @@ def notify_expiring_assets():
                     label="System",
                     icon="information",
                 )
+                if bot or superuser:
+                    # NOTIFY
+                    send_admin_notification(
+                        bot or superuser,
+                        verb="Asset warranty expiry approaching",
+                        description=(
+                            f"Asset '{asset.asset_name}' is due to expire on "
+                            f"{asset.expiry_date}."
+                        ),
+                        target=asset,
+                        level="warning",
+                        icon="warning-outline",
+                        redirect=reverse("asset-category-view"),
+                    )
 
 
 def notify_expiring_documents():
@@ -88,6 +103,20 @@ def notify_expiring_documents():
                     label="System",
                     icon="information",
                 )
+                if bot:
+                    # NOTIFY
+                    send_admin_notification(
+                        bot,
+                        verb="Document expiry approaching",
+                        description=(
+                            f"Document '{document.title}' for {document.employee_id} "
+                            f"expires on {document.expiry_date}."
+                        ),
+                        target=document,
+                        level="warning",
+                        icon="warning-outline",
+                        redirect=reverse("asset-category-view"),
+                    )
             if today >= expiry_date:
                 document.is_active = False
 

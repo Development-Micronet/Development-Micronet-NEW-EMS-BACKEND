@@ -40,6 +40,7 @@ from horilla.decorators import (
 )
 from horilla.group_by import group_by_queryset
 from horilla.horilla_settings import HORILLA_DATE_FORMATS
+from notifications.helpers import send_admin_notification, send_employee_notification
 from notifications.signals import notify
 from payroll.context_processors import get_active_employees
 from payroll.filters import ContractFilter, ContractReGroup, PayslipFilter
@@ -119,9 +120,35 @@ def contract_update(request, contract_id, **kwargs):
         return redirect(contract_view)
     contract_form = ContractForm(instance=contract)
     if request.method == "POST":
+        previous_wage = contract.wage
         contract_form = ContractForm(request.POST, request.FILES, instance=contract)
         if contract_form.is_valid():
-            contract_form.save()
+            updated_contract = contract_form.save()
+            if previous_wage != updated_contract.wage:
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    updated_contract.employee_id,
+                    verb="Salary revised",
+                    description="Your salary details have been revised.",
+                    target=updated_contract,
+                    level="info",
+                    icon="cash-outline",
+                    redirect=reverse("contract-view"),
+                )
+                # NOTIFY
+                send_admin_notification(
+                    request.user,
+                    verb="Salary revised",
+                    description=(
+                        f"Salary details were revised for "
+                        f"{updated_contract.employee_id}."
+                    ),
+                    target=updated_contract,
+                    level="info",
+                    icon="cash-outline",
+                    redirect=reverse("contract-view"),
+                )
             messages.success(request, _("Contract updated"))
             return redirect(contract_view)
     return render(
@@ -463,6 +490,22 @@ def update_payslip_status(request, payslip_id):
     if payslip:
         payslip.status = status
         payslip.save()
+        if status in ["confirmed", "paid"]:
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Payroll finalized",
+                description=(
+                    f"Payroll status for {payslip.employee_id} was updated to "
+                    f"{payslip.get_status_display()}."
+                ),
+                target=payslip,
+                level="success",
+                icon="card-outline",
+                redirect=reverse(
+                    "view-created-payslip", kwargs={"payslip_id": payslip.id}
+                ),
+            )
         messages.success(request, _("Payslip status updated"))
     else:
         messages.error(request, _("Payslip not found"))

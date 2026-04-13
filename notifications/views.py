@@ -15,6 +15,7 @@ from django.views.generic import ListView
 from swapper import load_model
 
 from base.models import NotificationSound
+from notifications.realtime import schedule_notification_snapshot_broadcast
 from notifications import settings
 from notifications.settings import get_config
 from notifications.utils import id2slug, slug2id
@@ -68,6 +69,10 @@ class UnreadNotificationsList(NotificationViewList):
 @login_required
 def mark_all_as_read(request):
     request.user.notifications.mark_all_as_read()
+    schedule_notification_snapshot_broadcast(
+        request.user.id,
+        event={"type": "notification_bulk_read"},
+    )
 
     _next = request.GET.get("next")
 

@@ -71,6 +71,7 @@ from horilla.decorators import (
 from horilla.group_by import group_by_queryset
 from horilla.horilla_settings import HORILLA_DATE_FORMATS
 from horilla.methods import horilla_users_with_perms
+from notifications.helpers import send_admin_notification, send_employee_notification
 from notifications.signals import notify
 
 
@@ -647,6 +648,34 @@ def asset_request_approve(request, req_id):
 
                 asset_request.asset_request_status = "Approved"
                 asset_request.save()
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    allocation.assigned_to_employee_id,
+                    verb="Asset assigned",
+                    description=f"The asset '{asset}' has been assigned to you.",
+                    target=allocation,
+                    level="info",
+                    icon="cube-outline",
+                    redirect=reverse("asset-request-allocation-view")
+                    + f"?asset_request_date={asset_request.asset_request_date}&"
+                    f"asset_request_status={asset_request.asset_request_status}",
+                )
+                # NOTIFY
+                send_admin_notification(
+                    request.user,
+                    verb="Asset assigned",
+                    description=(
+                        f"Asset '{asset}' was assigned to "
+                        f"{allocation.assigned_to_employee_id}."
+                    ),
+                    target=allocation,
+                    level="info",
+                    icon="cube-outline",
+                    redirect=reverse("asset-request-allocation-view")
+                    + f"?asset_request_date={asset_request.asset_request_date}&"
+                    f"asset_request_status={asset_request.asset_request_status}",
+                )
 
                 notify.send(
                     request.user.employee_get,
@@ -771,6 +800,32 @@ def asset_allocate_creation(request):
             form = AssetAllocationForm(
                 initial={"assigned_by_employee_id": request.user.employee_get}
             )
+            # NOTIFY
+            send_employee_notification(
+                request.user,
+                instance.assigned_to_employee_id,
+                verb="Asset assigned",
+                description=(
+                    f"The asset '{instance.asset_id}' has been assigned to you."
+                ),
+                target=instance,
+                level="info",
+                icon="cube-outline",
+                redirect=reverse("asset-request-allocation-view"),
+            )
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Asset assigned",
+                description=(
+                    f"Asset '{instance.asset_id}' was assigned to "
+                    f"{instance.assigned_to_employee_id}."
+                ),
+                target=instance,
+                level="info",
+                icon="cube-outline",
+                redirect=reverse("asset-request-allocation-view"),
+            )
             messages.success(request, _("Asset allocated successfully!."))
         context["asset_allocation_form"] = form
     return render(request, "request_allocation/asset_allocation_creation.html", context)
@@ -785,6 +840,17 @@ def asset_allocate_return_request(request, asset_id):
     asset_assign = AssetAssignment.objects.get(id=asset_id)
     asset_assign.return_request = True
     asset_assign.save()
+    # NOTIFY
+    send_employee_notification(
+        request.user,
+        asset_assign.assigned_to_employee_id,
+        verb="Asset return requested",
+        description=f"Return request for '{asset_assign.asset_id}' has been submitted.",
+        target=asset_assign,
+        level="info",
+        icon="return-up-back-outline",
+        redirect=reverse("asset-request-allocation-view"),
+    )
     message = _("Return request for {} initiated.").format(asset_assign.asset_id)
     messages.success(request, message)
     permed_users = horilla_users_with_perms("asset.change_assetassignment")
@@ -858,6 +924,16 @@ def asset_allocate_return(request, asset_id):
                     asset_allocation.return_images.add(*attachments)
                 asset.asset_status = "Available"
                 asset.save()
+                # NOTIFY
+                send_admin_notification(
+                    request.user,
+                    verb="Asset returned",
+                    description=f"Asset '{asset}' was returned successfully.",
+                    target=asset_allocation,
+                    level="success",
+                    icon="checkmark-circle-outline",
+                    redirect=reverse("asset-request-allocation-view"),
+                )
                 messages.info(request, _("Asset Return Successful !."))
                 return HttpResponse(
                     response.content.decode("utf-8")
@@ -879,6 +955,31 @@ def asset_allocate_return(request, asset_id):
                     attachment.save()
                     attachments.append(attachment)
                 asset_allocation.return_images.add(*attachments)
+            # NOTIFY
+            send_employee_notification(
+                request.user,
+                asset_allocation.assigned_to_employee_id,
+                verb="Asset reported damaged/lost",
+                description=(
+                    f"You reported asset '{asset}' as {asset_return_status.lower()}."
+                ),
+                target=asset_allocation,
+                level="info",
+                icon="alert-circle-outline",
+                redirect=reverse("asset-request-allocation-view"),
+            )
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Asset reported damaged/lost",
+                description=(
+                    f"Asset '{asset}' was reported as {asset_return_status.lower()}."
+                ),
+                target=asset_allocation,
+                level="error",
+                icon="alert-circle-outline",
+                redirect=reverse("asset-request-allocation-view"),
+            )
             messages.info(request, _("Asset Return Successful!."))
             return HttpResponse(
                 response.content.decode("utf-8") + "<script>location.reload();</script>"

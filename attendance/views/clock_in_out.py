@@ -42,6 +42,10 @@ from base.context_processors import (
 from base.models import AttendanceAllowedIP, Company, EmployeeShiftDay
 from horilla.decorators import hx_request_required, login_required
 from horilla.horilla_middlewares import _thread_locals
+from notifications.helpers import (
+    send_admin_notification,
+    send_employee_notification,
+)
 
 
 def late_come_create(attendance):
@@ -51,6 +55,7 @@ def late_come_create(attendance):
         attendance : attendance object
     """
 
+    created = False
     if AttendanceLateComeEarlyOut.objects.filter(
         type="late_come", attendance_id=attendance
     ).exists():
@@ -59,11 +64,40 @@ def late_come_create(attendance):
         ).first()
     else:
         late_come_obj = AttendanceLateComeEarlyOut()
+        created = True
 
     late_come_obj.type = "late_come"
     late_come_obj.attendance_id = attendance
     late_come_obj.employee_id = attendance.employee_id
     late_come_obj.save()
+
+    if created:
+        actor = attendance.employee_id
+        # NOTIFY
+        send_employee_notification(
+            actor,
+            attendance.employee_id,
+            verb="Late arrival detected",
+            description=(
+                f"Your late arrival on {attendance.attendance_date} was recorded at "
+                f"{attendance.attendance_clock_in}."
+            ),
+            target=late_come_obj,
+            level="warning",
+            icon="warning-outline",
+        )
+        # NOTIFY
+        send_admin_notification(
+            actor,
+            verb="Late arrival detected",
+            description=(
+                f"{attendance.employee_id} was marked late on "
+                f"{attendance.attendance_date}."
+            ),
+            target=late_come_obj,
+            level="info",
+            icon="warning-outline",
+        )
     return late_come_obj
 
 
@@ -197,6 +231,19 @@ def create_or_resume_attendance_session(
     attendance.save()
     sync_work_record_from_attendance(attendance)
     reset_working_employee_cache()
+    # NOTIFY
+    send_employee_notification(
+        employee,
+        employee,
+        verb="Checked in",
+        description=(
+            f"You checked in on {attendance.attendance_date} at "
+            f"{attendance.attendance_clock_in}."
+        ),
+        target=attendance,
+        level="success",
+        icon="enter-outline",
+    )
     return attendance, activity, created
 
 
@@ -631,6 +678,46 @@ def perform_clock_out(employee, date_today, now, out_datetime=None, attendance=N
     )
 
     if not attendance or not shift:
+        if attendance is not None and attendance.attendance_clock_out:
+            # NOTIFY
+            send_employee_notification(
+                employee,
+                employee,
+                verb="Checked out",
+                description=(
+                    f"You checked out on {attendance.attendance_date} at "
+                    f"{attendance.attendance_clock_out}."
+                ),
+                target=attendance,
+                level="success",
+                icon="exit-outline",
+            )
+            if attendance.attendance_overtime not in [None, "", "00:00", "00:00:00"]:
+                # NOTIFY
+                send_employee_notification(
+                    employee,
+                    employee,
+                    verb="Overtime recorded",
+                    description=(
+                        f"Your overtime of {attendance.attendance_overtime} for "
+                        f"{attendance.attendance_date} has been recorded."
+                    ),
+                    target=attendance,
+                    level="info",
+                    icon="time-outline",
+                )
+                # NOTIFY
+                send_admin_notification(
+                    employee,
+                    verb="Overtime recorded",
+                    description=(
+                        f"{employee} recorded {attendance.attendance_overtime} overtime "
+                        f"for {attendance.attendance_date}."
+                    ),
+                    target=attendance,
+                    level="info",
+                    icon="time-outline",
+                )
         return attendance
 
     early_out_instance = attendance.late_come_early_out.filter(type="early_out")
@@ -660,6 +747,47 @@ def perform_clock_out(employee, date_today, now, out_datetime=None, attendance=N
             )
 
     reset_working_employee_cache()
+
+    if attendance.attendance_clock_out:
+        # NOTIFY
+        send_employee_notification(
+            employee,
+            employee,
+            verb="Checked out",
+            description=(
+                f"You checked out on {attendance.attendance_date} at "
+                f"{attendance.attendance_clock_out}."
+            ),
+            target=attendance,
+            level="success",
+            icon="exit-outline",
+        )
+        if attendance.attendance_overtime not in [None, "", "00:00", "00:00:00"]:
+            # NOTIFY
+            send_employee_notification(
+                employee,
+                employee,
+                verb="Overtime recorded",
+                description=(
+                    f"Your overtime of {attendance.attendance_overtime} for "
+                    f"{attendance.attendance_date} has been recorded."
+                ),
+                target=attendance,
+                level="info",
+                icon="time-outline",
+            )
+            # NOTIFY
+            send_admin_notification(
+                employee,
+                verb="Overtime recorded",
+                description=(
+                    f"{employee} recorded {attendance.attendance_overtime} overtime "
+                    f"for {attendance.attendance_date}."
+                ),
+                target=attendance,
+                level="info",
+                icon="time-outline",
+            )
 
     return attendance
 
@@ -706,6 +834,7 @@ def early_out_create(attendance):
     args:
         attendance : attendance obj
     """
+    created = False
     if AttendanceLateComeEarlyOut.objects.filter(
         type="early_out", attendance_id=attendance
     ).exists():
@@ -714,10 +843,38 @@ def early_out_create(attendance):
         ).first()
     else:
         late_come_obj = AttendanceLateComeEarlyOut()
+        created = True
     late_come_obj.type = "early_out"
     late_come_obj.attendance_id = attendance
     late_come_obj.employee_id = attendance.employee_id
     late_come_obj.save()
+    if created:
+        actor = attendance.employee_id
+        # NOTIFY
+        send_employee_notification(
+            actor,
+            attendance.employee_id,
+            verb="Early departure detected",
+            description=(
+                f"Your early departure on {attendance.attendance_date} was recorded at "
+                f"{attendance.attendance_clock_out}."
+            ),
+            target=late_come_obj,
+            level="warning",
+            icon="exit-outline",
+        )
+        # NOTIFY
+        send_admin_notification(
+            actor,
+            verb="Early departure detected",
+            description=(
+                f"{attendance.employee_id} was marked early out on "
+                f"{attendance.attendance_date}."
+            ),
+            target=late_come_obj,
+            level="info",
+            icon="exit-outline",
+        )
     return late_come_obj
 
 

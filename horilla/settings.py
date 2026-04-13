@@ -57,6 +57,7 @@ EMPLOYEE_ADMIN_ACCESS_TOKEN = env("EMPLOYEE_ADMIN_ACCESS_TOKEN", default=None)
 # Application definition
 
 INSTALLED_APPS = [
+    "channels",
     "django.contrib.admin",  # Re-enabled for admin access
     "django.contrib.auth",
     "django.contrib.contenttypes",  # Required for permissions and ContentType
@@ -81,6 +82,7 @@ INSTALLED_APPS = [
     # "widget_tweaks",  # Disabled for API-only mode
     "django_apscheduler",
     "performance",
+    "configuration",
 ]
 
 # Ensure all project apps are always present in every runtime (local/prod/worker).
@@ -150,6 +152,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "horilla.wsgi.application"
+ASGI_APPLICATION = "horilla.asgi.application"
 
 
 # Database
@@ -223,6 +226,36 @@ LOGIN_URL = "/login"
 
 
 SIMPLE_HISTORY_REVERT_DISABLED = True
+
+CHANNELS_REDIS_URL = (
+    env("CHANNELS_REDIS_URL", default="") or env("REDIS_URL", default="")
+).strip()
+CHANNELS_REDIS_PREFIX = env("CHANNELS_REDIS_PREFIX", default="horilla")
+CHANNELS_LAYER_CAPACITY = env.int("CHANNELS_LAYER_CAPACITY", default=1500)
+CHANNELS_LAYER_EXPIRY = env.int("CHANNELS_LAYER_EXPIRY", default=60)
+
+if CHANNELS_REDIS_URL:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [CHANNELS_REDIS_URL],
+                "prefix": CHANNELS_REDIS_PREFIX,
+                "capacity": CHANNELS_LAYER_CAPACITY,
+                "expiry": CHANNELS_LAYER_EXPIRY,
+            },
+        }
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+            "CONFIG": {
+                "capacity": CHANNELS_LAYER_CAPACITY,
+                "expiry": CHANNELS_LAYER_EXPIRY,
+            },
+        }
+    }
 
 
 DJANGO_NOTIFICATIONS_CONFIG = {

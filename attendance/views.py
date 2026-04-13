@@ -179,8 +179,22 @@ def attendance_create(request):
         form = AttendanceForm(request.POST)
         form = choosesubordinates(request, form, "attendance.add_attendance")
         if form.is_valid():
-            form.save()
+            attendance_instance = form.save()
             messages.success(request, _("Attendance added."))
+            # Notify all admin users on attendance request creation
+            from django.contrib.auth.models import User
+            admin_users = User.objects.filter(is_superuser=True, is_active=True)
+            notify.send(
+                request.user.employee_get,
+                recipient=[admin.employee_get for admin in admin_users if hasattr(admin, "employee_get")],
+                verb=f"Attendance request created by {request.user.employee_get}.",
+                verb_ar=f"تم إنشاء طلب الحضور بواسطة {request.user.employee_get}.",
+                verb_de=f"Anwesenheitsanfrage erstellt von {request.user.employee_get}.",
+                verb_es=f"Solicitud de asistencia creada por {request.user.employee_get}.",
+                verb_fr=f"Demande de présence créée par {request.user.employee_get}.",
+                redirect=reverse("attendance-view"),
+                icon="calendar",
+            )
             response = render(
                 request, "attendance/attendance/form.html", {"form": form}
             )

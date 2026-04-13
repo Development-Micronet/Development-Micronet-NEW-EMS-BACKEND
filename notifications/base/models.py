@@ -80,7 +80,15 @@ class NotificationQuerySet(models.query.QuerySet):
         if recipient:
             qset = qset.filter(recipient=recipient)
 
-        return qset.update(unread=False)
+        updated = qset.update(unread=False)
+        if updated and recipient is not None:
+            from notifications.realtime import schedule_notification_snapshot_broadcast
+
+            schedule_notification_snapshot_broadcast(
+                recipient.id,
+                event={"type": "notification_bulk_read"},
+            )
+        return updated
 
     def mark_all_as_unread(self, recipient=None):
         """Mark as unread any read messages in the current queryset.
@@ -92,7 +100,15 @@ class NotificationQuerySet(models.query.QuerySet):
         if recipient:
             qset = qset.filter(recipient=recipient)
 
-        return qset.update(unread=True)
+        updated = qset.update(unread=True)
+        if updated and recipient is not None:
+            from notifications.realtime import schedule_notification_snapshot_broadcast
+
+            schedule_notification_snapshot_broadcast(
+                recipient.id,
+                event={"type": "notification_bulk_unread"},
+            )
+        return updated
 
     def deleted(self):
         """Return only deleted items in the current queryset"""
@@ -113,7 +129,15 @@ class NotificationQuerySet(models.query.QuerySet):
         if recipient:
             qset = qset.filter(recipient=recipient)
 
-        return qset.update(deleted=True)
+        updated = qset.update(deleted=True)
+        if updated and recipient is not None:
+            from notifications.realtime import schedule_notification_snapshot_broadcast
+
+            schedule_notification_snapshot_broadcast(
+                recipient.id,
+                event={"type": "notification_bulk_deleted"},
+            )
+        return updated
 
     def mark_all_as_active(self, recipient=None):
         """Mark current queryset as active(un-deleted).
@@ -124,7 +148,15 @@ class NotificationQuerySet(models.query.QuerySet):
         if recipient:
             qset = qset.filter(recipient=recipient)
 
-        return qset.update(deleted=False)
+        updated = qset.update(deleted=False)
+        if updated and recipient is not None:
+            from notifications.realtime import schedule_notification_snapshot_broadcast
+
+            schedule_notification_snapshot_broadcast(
+                recipient.id,
+                event={"type": "notification_bulk_restored"},
+            )
+        return updated
 
     def mark_as_unsent(self, recipient=None):
         qset = self.sent()

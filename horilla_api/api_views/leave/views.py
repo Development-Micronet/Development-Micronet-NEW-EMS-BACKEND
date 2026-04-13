@@ -17,6 +17,7 @@ from leave.filters import *
 from leave.methods import filter_conditional_leave_request
 from leave.models import AvailableLeave, LeaveAllocationRequest, LeaveRequest, LeaveType
 from notifications.signals import notify
+from notifications.helpers import send_admin_notification
 
 from ...api_decorators.base.decorators import manager_permission_required
 from ...api_methods.base.methods import groupby_queryset
@@ -74,19 +75,29 @@ class EmployeeLeaveRequestGetCreateAPIView(APIView):
         serializer = LeaveRequestCreateUpdateSerializer(data=data)
         if serializer.is_valid():
             leave_request = serializer.save()
-            with contextlib.suppress(Exception):
-                notify.send(
-                    request.user.employee_get,
-                    recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                    verb="You have a new leave request to validate.",
-                    verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
-                    verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
-                    verb_es="Tiene una nueva solicitud de permiso que debe validar.",
-                    verb_fr="Vous avez une nouvelle demande de congé à valider.",
-                    icon="people-circle",
-                    redirect=f"/leave/request-view?id={leave_request.id}",
-                    api_redirect=f"/api/leave/request/{leave_request.id}/",
-                )
+            # Notify all admin users on leave request creation
+            from django.contrib.auth.models import User
+            send_admin_notification(
+                request.user.employee_get,
+                verb=f"Leave request created by {request.user.employee_get}.",
+                description=f"A new leave request was created by {request.user.employee_get}.",
+                target=leave_request,
+                level="info",
+                icon="people-circle",
+                redirect=f"/leave/request-view?id={leave_request.id}",
+            )
+            # Also notify the employee (self) for confirmation
+            notify.send(
+                request.user.employee_get,
+                recipient=[request.user.employee_get],
+                verb="Your leave request has been submitted.",
+                verb_ar="تم تقديم طلب الإجازة الخاص بك.",
+                verb_de="Ihr Urlaubsantrag wurde eingereicht.",
+                verb_es="Su solicitud de permiso ha sido enviada.",
+                verb_fr="Votre demande de congé a été soumise.",
+                redirect=f"/leave/request-view?id={leave_request.id}",
+                icon="people-circle",
+            )
             return Response(
                 userLeaveRequestGetAllSerilaizer(leave_request).data, status=201
             )
@@ -545,19 +556,33 @@ class LeaveRequestGetUpdateDeleteAPIView(APIView):
             serializer = LeaveRequestCreateUpdateSerializer(leave_request, data=data)
             if serializer.is_valid():
                 leave_request = serializer.save()
-                with contextlib.suppress(Exception):
-                    notify.send(
-                        request.user.employee_get,
-                        recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
-                        verb=f"Leave request updated for {leave_request.employee_id}.",
-                        verb_ar=f"تم تحديث طلب الإجازة لـ {leave_request.employee_id}.",
-                        verb_de=f"Urlaubsantrag aktualisiert für {leave_request.employee_id}.",
-                        verb_es=f"Solicitud de permiso actualizada para {leave_request.employee_id}.",
-                        verb_fr=f"Demande de congé mise à jour pour {leave_request.employee_id}.",
-                        icon="people-circle",
-                        redirect=f"/leave/request-view?id={leave_request.id}",
-                        api_redirect=f"/api/leave/request/{leave_request.id}/",
-                    )
+                # Notify the employee on approve/reject
+                notify.send(
+                    request.user.employee_get,
+                    recipient=[leave_request.employee_id.employee_user_id],
+                    verb=f"Your leave request has been updated (approved/rejected).",
+                    verb_ar=f"تم تحديث طلب الإجازة الخاص بك (تمت الموافقة/الرفض).",
+                    verb_de=f"Ihr Urlaubsantrag wurde aktualisiert (genehmigt/abgelehnt).",
+                    verb_es=f"Su solicitud de permiso ha sido actualizada (aprobada/rechazada).",
+                    verb_fr=f"Votre demande de congé a été mise à jour (approuvée/rejetée).",
+                    redirect=f"/leave/request-view?id={leave_request.id}",
+                    icon="people-circle",
+                )
+                # Also notify all admins about the approval/rejection
+                from django.contrib.auth.models import User
+                admin_users = User.objects.filter(is_superuser=True, is_active=True)
+                admin_recipients = [admin.employee_get for admin in admin_users if hasattr(admin, "employee_get")]
+                notify.send(
+                    request.user.employee_get,
+                    recipient=admin_recipients,
+                    verb=f"Leave request for {leave_request.employee_id} has been updated (approved/rejected).",
+                    verb_ar=f"تم تحديث طلب الإجازة لـ {leave_request.employee_id} (تمت الموافقة/الرفض).",
+                    verb_de=f"Urlaubsantrag für {leave_request.employee_id} wurde aktualisiert (genehmigt/abgelehnt).",
+                    verb_es=f"La solicitud de permiso para {leave_request.employee_id} ha sido actualizada (aprobada/rechazada).",
+                    verb_fr=f"La demande de congé pour {leave_request.employee_id} a été mise à jour (approuvée/rejetée).",
+                    redirect=f"/leave/request-view?id={leave_request.id}",
+                    icon="people-circle",
+                )
                 return Response(
                     UserLeaveRequestGetSerilaizer(
                         leave_request, context={"request": request}

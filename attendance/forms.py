@@ -37,9 +37,14 @@ from django.db.models.query import QuerySet
 from django.forms import DateTimeInput
 from django.template.loader import render_to_string
 from django.utils.html import format_html
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from attendance.filters import AttendanceFilters
+from attendance.methods.notifications import (
+    get_attendance_request_notification_actor,
+    notify_attendance_request_created,
+)
 from attendance.models import (
     Attendance,
     AttendanceActivity,
@@ -69,6 +74,49 @@ from horilla_widgets.widgets.horilla_multi_select_field import HorillaMultiSelec
 from horilla_widgets.widgets.select_widgets import HorillaMultiSelectWidget
 
 logger = logging.getLogger(__name__)
+
+
+ATTENDANCE_REQUEST_CREATE_PAST_DAYS_LIMIT = 3
+
+
+def has_extended_attendance_request_create_access(request):
+    """
+    Privileged attendance users can create requests outside the employee window.
+    """
+    if request is None or not getattr(request, "user", None):
+        return False
+
+    user = request.user
+    return bool(
+        user.has_perm("attendance.add_attendance")
+        or user.has_perm("attendance.change_attendance")
+        or user.has_perm("attendance.view_attendance")
+        or user.has_perm("attendance.view_attendanceovertime")
+        or is_reportingmanager(request)
+    )
+
+
+def get_attendance_request_create_validation_message():
+    return _(
+        "Attendance requests can only be created for today and the previous %(days)s days."
+    ) % {"days": ATTENDANCE_REQUEST_CREATE_PAST_DAYS_LIMIT}
+
+
+def validate_attendance_request_create_date(attendance_date, request=None):
+    """
+    Regular employees can create attendance requests for today and the previous
+    few days. Update requests are handled separately where an attendance row
+    already exists.
+    """
+    request = request or getattr(horilla_middlewares._thread_locals, "request", None)
+    if has_extended_attendance_request_create_access(request):
+        return True
+
+    today = timezone.localdate()
+    earliest_allowed_date = today - datetime.timedelta(
+        days=ATTENDANCE_REQUEST_CREATE_PAST_DAYS_LIMIT
+    )
+    return not attendance_date or earliest_allowed_date <= attendance_date <= today
 
 
 class AttendanceUpdateForm(BaseModelForm):
@@ -575,6 +623,9 @@ class AttendanceRequestForm(BaseModelForm):
         )
 
     def __init__(self, *args, **kwargs):
+        self.request = kwargs.pop(
+            "request", getattr(horilla_middlewares._thread_locals, "request", None)
+        )
         if instance := kwargs.get("instance"):
             # django forms not showing value inside the date, time html element.
             # so here overriding default forms instance method to set initial value
@@ -775,6 +826,13 @@ class NewRequestForm(AttendanceRequestForm):
             self.new_instance = None
             return cleaned_data
 
+        if not validate_attendance_request_create_date(attendance_date, self.request):
+            self.add_error(
+                "attendance_date",
+                get_attendance_request_create_validation_message(),
+            )
+            self.new_instance = None
+            return cleaned_data
         new_instance = Attendance(**data)
         new_instance.is_validate_request = True
         new_instance.attendance_validated = False
@@ -1117,7 +1175,10 @@ class BulkAttendanceRequestForm(BaseModelForm):
         )
 
     def __init__(self, *args, **kwargs):
-        request = getattr(horilla_middlewares._thread_locals, "request", None)
+        self.request = kwargs.pop(
+            "request", getattr(horilla_middlewares._thread_locals, "request", None)
+        )
+        request = self.request
         employee = request.user.employee_get
         super().__init__(*args, **kwargs)
         if employee and hasattr(employee, "employee_work_info"):
@@ -1162,6 +1223,20 @@ class BulkAttendanceRequestForm(BaseModelForm):
         date_list = get_date_list(employee_id, from_date, to_date)
         if from_date and to_date and from_date > to_date:
             raise ValidationError({"to_date": _("To date should be after from date")})
+        if from_date and not validate_attendance_request_create_date(
+            from_date, self.request
+        ):
+            self.add_error(
+                "from_date",
+                get_attendance_request_create_validation_message(),
+            )
+        if to_date and not validate_attendance_request_create_date(
+            to_date, self.request
+        ):
+            self.add_error(
+                "to_date",
+                get_attendance_request_create_validation_message(),
+            )
         if to_date == today and attendance_clock_out > now:
             raise ValidationError(
                 {
@@ -1219,7 +1294,7 @@ class BulkAttendanceRequestForm(BaseModelForm):
                     "attendance_clock_out_date": date,
                 }
             )
-            form = NewRequestForm(data=initial_data)
+            form = NewRequestForm(data=initial_data, request=self.request)
             if form.is_valid():
                 instance = form.save(commit=False)
                 instance.is_validate_request = True
@@ -1229,6 +1304,11 @@ class BulkAttendanceRequestForm(BaseModelForm):
                 if batch:
                     instance.batch_attendance_id = batch
                 instance.save()
+                if self.request is not None:
+                    notify_attendance_request_created(
+                        get_attendance_request_notification_actor(self.request.user),
+                        instance,
+                    )
             else:
                 logger(form.errors)
         instance = super().save(commit=False)

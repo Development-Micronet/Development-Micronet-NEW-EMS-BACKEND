@@ -68,6 +68,7 @@ from horilla.decorators import (
     permission_required,
 )
 from horilla.group_by import group_by_queryset
+from notifications.helpers import send_admin_notification, send_employee_notification
 from notifications.signals import notify
 
 logger = logging.getLogger(__name__)
@@ -472,6 +473,16 @@ def ticket_create(request):
             mail_thread = TicketSendThread(request, ticket, type="create")
             mail_thread.start()
             messages.success(request, _("The Ticket created successfully."))
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Ticket created",
+                description=f"{ticket.employee_id} created help desk ticket '{ticket}'.",
+                target=ticket,
+                level="info",
+                icon="help-circle-outline",
+                redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
+            )
             employees = ticket.assigned_to.all()
             assignees = [employee.employee_user_id for employee in employees]
             assignees.append(ticket.employee_id.employee_user_id)
@@ -633,6 +644,43 @@ def change_ticket_status(request, ticket_id):
                 "cur_status": ticket.get_status_display(),
                 "time": time,
             }
+            # NOTIFY
+            send_employee_notification(
+                request.user,
+                ticket.employee_id,
+                verb="Ticket status updated",
+                description=(
+                    f"Your ticket '{ticket}' status changed to "
+                    f"{ticket.get_status_display()}."
+                ),
+                target=ticket,
+                level="success" if ticket.status == "resolved" else "info",
+                icon="sync-outline",
+                redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
+            )
+            if ticket.status == "new":
+                # NOTIFY
+                send_admin_notification(
+                    request.user,
+                    verb="Ticket reopened",
+                    description=f"Ticket '{ticket}' was reopened.",
+                    target=ticket,
+                    level="warning",
+                    icon="refresh-outline",
+                    redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
+                )
+            elif ticket.status == "resolved":
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    ticket.employee_id,
+                    verb="Ticket resolved",
+                    description=f"Your ticket '{ticket}' has been resolved.",
+                    target=ticket,
+                    level="success",
+                    icon="checkmark-circle-outline",
+                    redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
+                )
             employees = ticket.assigned_to.all()
             assignees = [employee.employee_user_id for employee in employees]
             assignees.append(ticket.employee_id.employee_user_id)
@@ -1210,6 +1258,29 @@ def comment_create(request, ticket_id):
                         )
                         a_form.save()
             messages.success(request, _("A new comment has been created."))
+            if request.user.employee_get == ticket.employee_id:
+                # NOTIFY
+                send_admin_notification(
+                    request.user,
+                    verb="Employee replied to ticket",
+                    description=f"{ticket.employee_id} replied to ticket '{ticket}'.",
+                    target=comment,
+                    level="info",
+                    icon="chatbubble-outline",
+                    redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
+                )
+            else:
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    ticket.employee_id,
+                    verb="Admin replied to ticket",
+                    description=f"There is a new reply on your ticket '{ticket}'.",
+                    target=comment,
+                    level="info",
+                    icon="chatbubble-outline",
+                    redirect=reverse("ticket-detail", kwargs={"ticket_id": ticket.id}),
+                )
     return redirect(ticket_detail, ticket_id=ticket_id)
 
 

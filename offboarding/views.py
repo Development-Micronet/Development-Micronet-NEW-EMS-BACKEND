@@ -25,6 +25,7 @@ from horilla.decorators import (
 )
 from horilla.group_by import group_by_queryset as group_by
 from horilla.methods import get_horilla_model_class
+from notifications.helpers import send_admin_notification, send_employee_notification
 from notifications.signals import notify
 from offboarding.decorators import (
     any_manager_can_enter,
@@ -605,6 +606,18 @@ def update_task_status(request, *args, **kwargs):
         employee_id__id__in=employee_ids, task_id__id=task_id
     )
     employee_task.update(status=status)
+    if status == "done":
+        task_instance = employee_task.first().task_id if employee_task.exists() else None
+        # NOTIFY
+        send_admin_notification(
+            request.user,
+            verb="Offboarding task completed",
+            description="An offboarding task was marked as completed.",
+            target=task_instance,
+            level="success",
+            icon="checkmark-done-outline",
+            redirect=reverse("offboarding-pipeline"),
+        )
     notify.send(
         request.user.employee_get,
         recipient=User.objects.filter(
@@ -865,6 +878,17 @@ def create_resignation_request(request):
         form = ResignationLetterForm(request.POST, instance=instance)
         if form.is_valid():
             form.save()
+            resignation = form.instance
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Resignation submitted",
+                description=f"{resignation.employee_id} submitted a resignation request.",
+                target=resignation,
+                level="info",
+                icon="log-out-outline",
+                redirect=reverse("request-view"),
+            )
             messages.success(request, _("Resignation letter saved"))
             return HttpResponse("<script>window.location.reload()</script>")
     return render(request, "offboarding/resignation/form.html", {"form": form})
@@ -926,6 +950,18 @@ def update_status(request):
             messages.success(
                 request, f"Resignation request has been {letter.get_status_display()}"
             )
+            if status == "approved":
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    letter.employee_id,
+                    verb="Resignation accepted",
+                    description="Your resignation request has been accepted.",
+                    target=letter,
+                    level="info",
+                    icon="checkmark-circle-outline",
+                    redirect="#",
+                )
             notify.send(
                 request.user.employee_get,
                 recipient=letter.employee_id.employee_user_id,

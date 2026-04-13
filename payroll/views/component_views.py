@@ -47,6 +47,7 @@ from horilla.horilla_settings import HORILLA_DATE_FORMATS
 from horilla.methods import dynamic_attr, get_horilla_model_class, get_urlencode
 
 # from leave.models import AvailableLeave
+from notifications.helpers import send_admin_notification, send_employee_notification
 from notifications.signals import notify
 from payroll.filters import (
     AllowanceFilter,
@@ -754,6 +755,21 @@ def generate_payslip(request):
             end_date = form.cleaned_data["end_date"]
 
             group_name = form.cleaned_data["group_name"]
+            first_employee = employees.first()
+            if first_employee is not None:
+                # NOTIFY
+                send_admin_notification(
+                    request.user,
+                    verb="Payroll run initiated",
+                    description=(
+                        f"Payroll generation started for {employees.count()} "
+                        f"employee(s) from {start_date} to {end_date}."
+                    ),
+                    target=first_employee,
+                    level="info",
+                    icon="play-circle-outline",
+                    redirect=reverse("view-payslip"),
+                )
             for employee in employees:
                 contract = Contract.objects.filter(
                     employee_id=employee, contract_status="active"
@@ -781,6 +797,19 @@ def generate_payslip(request):
                 data["installments"] = payslip["installments"]
                 instance = save_payslip(**data)
                 instances.append(instance)
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    employee,
+                    verb="Payslip generated",
+                    description="Your payslip has been generated successfully.",
+                    target=instance,
+                    level="success",
+                    icon="document-text-outline",
+                    redirect=reverse(
+                        "view-created-payslip", kwargs={"payslip_id": instance.id}
+                    ),
+                )
                 notify.send(
                     request.user.employee_get,
                     recipient=employee.employee_user_id,
@@ -1609,7 +1638,19 @@ def create_reimbursement(request):
     if request.method == "POST":
         form = forms.ReimbursementForm(request.POST, request.FILES, instance=instance)
         if form.is_valid():
-            form.save()
+            reimbursement = form.save()
+            # NOTIFY
+            send_admin_notification(
+                request.user,
+                verb="Reimbursement submitted",
+                description=(
+                    f"{reimbursement.employee_id} submitted a reimbursement request."
+                ),
+                target=reimbursement,
+                level="info",
+                icon="receipt-outline",
+                redirect=reverse("view-reimbursement"),
+            )
             messages.success(request, "Reimbursement saved successfully")
             return HttpResponse(status=204, headers={"HX-Refresh": "true"})
     else:
@@ -1720,6 +1761,42 @@ def approve_reimbursements(request):
             emp = reimbursement.employee_id
             reimbursement.status = status
             reimbursement.save()
+            if status == "approved" and reimbursement.type == "leave_encashment":
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    emp,
+                    verb="Leave encashment processed",
+                    description="Your leave encashment request has been processed.",
+                    target=reimbursement,
+                    level="success",
+                    icon="wallet-outline",
+                    redirect=reverse("view-reimbursement") + f"?id={reimbursement.id}",
+                )
+                # NOTIFY
+                send_admin_notification(
+                    request.user,
+                    verb="Leave encashment processed",
+                    description=(
+                        f"Leave encashment was processed for {reimbursement.employee_id}."
+                    ),
+                    target=reimbursement,
+                    level="info",
+                    icon="wallet-outline",
+                    redirect=reverse("view-reimbursement") + f"?id={reimbursement.id}",
+                )
+            elif status == "approved" and reimbursement.type == "bonus_encashment":
+                # NOTIFY
+                send_employee_notification(
+                    request.user,
+                    emp,
+                    verb="Bonus processed",
+                    description="Your bonus encashment request has been processed.",
+                    target=reimbursement,
+                    level="success",
+                    icon="gift-outline",
+                    redirect=reverse("view-reimbursement") + f"?id={reimbursement.id}",
+                )
             if reimbursement.status == "requested":
                 if not (messages.get_messages(request)._queued_messages):
                     messages.info(request, _("Please check the data you provided."))
@@ -1729,6 +1806,17 @@ def approve_reimbursements(request):
                     _(f"Request {reimbursement.get_status_display()} successfully"),
                 )
         if status == "rejected":
+            # NOTIFY
+            send_employee_notification(
+                request.user,
+                emp,
+                verb="Reimbursement rejected",
+                description="Your reimbursement request has been rejected.",
+                target=reimbursement,
+                level="error",
+                icon="close-circle-outline",
+                redirect=reverse("view-reimbursement") + f"?id={reimbursement.id}",
+            )
             notify.send(
                 request.user.employee_get,
                 recipient=emp.employee_user_id,
@@ -1741,6 +1829,17 @@ def approve_reimbursements(request):
                 icon="checkmark",
             )
         else:
+            # NOTIFY
+            send_employee_notification(
+                request.user,
+                emp,
+                verb="Reimbursement approved",
+                description="Your reimbursement request has been approved.",
+                target=reimbursement,
+                level="success",
+                icon="checkmark-circle-outline",
+                redirect=reverse("view-reimbursement") + f"?id={reimbursement.id}",
+            )
             notify.send(
                 request.user.employee_get,
                 recipient=emp.employee_user_id,
