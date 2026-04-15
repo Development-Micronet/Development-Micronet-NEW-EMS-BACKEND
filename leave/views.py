@@ -8,8 +8,7 @@ from django.shortcuts import redirect, render
 from django.utils.translation import gettext as _
 from django.urls import reverse
 import contextlib
-from notifications.helpers import send_employee_notification
-from notifications.signals import notify
+from notifications.helpers import send_employee_notification, send_notification
 from leave.models import CompensatoryLeaveRequest
 from django.contrib.auth.models import User
 from datetime import date
@@ -55,27 +54,16 @@ def reject_compensatory_leave(request, comp_id):
                 send_employee_notification(
                     request.user,
                     user,
-                    verb="Comp-off rejected",
+                    verb="Your compensatory leave request has been rejected",
                     description="Your compensatory leave request has been rejected.",
                     target=comp_leave_req,
                     level="error",
                     icon="close-circle-outline",
+                    verb_ar="تم رفض طلب الإجازة التعويضية",
+                    verb_de="Ihr Antrag auf Freizeitausgleich wurde abgelehnt",
+                    verb_es="Se ha rechazado su solicitud de permiso compensatorio",
+                    verb_fr="Votre demande de congé compensatoire a été rejetée",
                     redirect=reverse("view-compensatory-leave") + f"?id={comp_leave_req.id}",
-                )
-            from notifications.realtime import schedule_notification_snapshot_broadcast
-            schedule_notification_snapshot_broadcast(comp_leave_req.employee_id.employee_user_id)
-            send_employee_notification(
-                request.user,
-                comp_leave_req.employee_id.employee_user_id,
-                verb="Your compensatory leave request has been rejected",
-                description="Your compensatory leave request has been rejected.",
-                target=comp_leave_req,
-                level="error",
-                verb_ar="تم رفض طلب الإجازة التعويضية",
-                verb_de="Ihr Antrag auf Freizeitausgleich wurde abgelehnt",
-                verb_es="Se ha rechazado su solicitud de permiso compensatorio",
-                verb_fr="Votre demande de congé compensatoire a été rejetée",
-                redirect=reverse("view-compensatory-leave") + f"?id={comp_leave_req.id}",
             )
         else:
             messages.info(
@@ -293,9 +281,11 @@ from leave.methods import (
 from leave.models import *
 from leave.models import leave_requested_dates
 from leave.threading import LeaveMailSendThread
-from notifications.helpers import send_admin_notification, send_employee_notification
-from notifications.signals import notify
-from notifications.realtime import schedule_notification_snapshot_broadcast
+from notifications.helpers import (
+    send_admin_notification,
+    send_employee_notification,
+    send_notification,
+)
 
 
 def generate_error_report(error_list, error_data, file_name):
@@ -738,8 +728,6 @@ def leave_request_creation(request, type_id=None, emp_id=None):
                     icon="calendar-outline",
                     redirect=reverse("request-view") + f"?id={leave_request.id}",
                 )
-                for admin in User.objects.filter(is_superuser=True, is_active=True):
-                    schedule_notification_snapshot_broadcast(admin)
                 send_employee_notification(
                     request.user.employee_get,
                     leave_request.employee_id.employee_user_id,
@@ -1304,9 +1292,9 @@ def leave_request_approve(request, id, emp_id=None):
                         managers.append(manager.employee_user_id)
                     if len(managers) > condition_approval.sequence:
                         with contextlib.suppress(Exception):
-                            notify.send(
+                            send_notification(
                                 request.user.employee_get,
-                                recipient=managers[condition_approval.sequence],
+                                managers[condition_approval.sequence],
                                 verb="You have a new leave request to validate.",
                                 verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
                                 verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
@@ -1339,21 +1327,6 @@ def leave_request_approve(request, id, emp_id=None):
                         icon="checkmark-circle-outline",
                         redirect=reverse("user-request-view") + f"?id={leave_request.id}",
                     )
-                schedule_notification_snapshot_broadcast(leave_request.employee_id.employee_user_id)
-                with contextlib.suppress(Exception):
-                    notify.send(
-                        request.user.employee_get,
-                        recipient=leave_request.employee_id.employee_user_id,
-                        verb="Your Leave request has been approved",
-                        verb_ar="تمت الموافقة على طلب الإجازة الخاص بك",
-                        verb_de="Ihr Urlaubsantrag wurde genehmigt",
-                        verb_es="Se ha aprobado su solicitud de permiso",
-                        verb_fr="Votre demande de congé a été approuvée",
-                        icon="people-circle",
-                        redirect=reverse("user-request-view")
-                        + f"?id={leave_request.id}",
-                    )
-                    schedule_notification_snapshot_broadcast(leave_request.employee_id.employee_user_id)
 
                 mail_thread = LeaveMailSendThread(
                     request, leave_request, type="approve"
@@ -1505,21 +1478,6 @@ def leave_request_cancel(request, id, emp_id=None):
                         icon="close-circle-outline",
                         redirect=reverse("user-request-view") + f"?id={leave_request.id}",
                     )
-                schedule_notification_snapshot_broadcast(leave_request.employee_id.employee_user_id)
-                with contextlib.suppress(Exception):
-                    notify.send(
-                        request.user.employee_get,
-                        recipient=leave_request.employee_id.employee_user_id,
-                        verb="Your leave request has been rejected.",
-                        verb_ar="تم رفض طلب الإجازة الخاص بك",
-                        verb_de="Ihr Urlaubsantrag wurde abgelehnt",
-                        verb_es="Tu solicitud de permiso ha sido rechazada",
-                        verb_fr="Votre demande de congé a été rejetée",
-                        icon="people-circle",
-                        redirect=reverse("user-request-view")
-                        + f"?id={leave_request.id}",
-                    )
-                    schedule_notification_snapshot_broadcast(leave_request.employee_id.employee_user_id)
 
                 mail_thread = LeaveMailSendThread(request, leave_request, type="reject")
                 mail_thread.start()
@@ -1720,10 +1678,10 @@ def leave_assign_one(request, obj_id):
             employees = Employee.objects.filter(id__in=new_employees).only(
                 "id", "employee_user_id"
             )
-            notifications = [
-                notify.send(
+            for employee in employees:
+                send_notification(
                     request.user.employee_get,
-                    recipient=employee.employee_user_id,
+                    employee.employee_user_id,
                     verb="New leave type is assigned to you",
                     verb_ar="تم تعيين نوع إجازة جديد لك",
                     verb_de="Ihnen wurde ein neuer Urlaubstyp zugewiesen",
@@ -1732,8 +1690,6 @@ def leave_assign_one(request, obj_id):
                     icon="people-circle",
                     redirect=reverse("user-request-view"),
                 )
-                for employee in employees
-            ]
 
         if len(employee_ids) != assigned_count:
             messages.info(
@@ -1935,9 +1891,9 @@ def leave_assign(request):
                     AvailableLeave.objects.bulk_create(new_assignments)
                     for user_id in success_messages:
                         with contextlib.suppress(Exception):
-                            notify.send(
+                            send_notification(
                                 request.user.employee_get,
-                                recipient=user_id,
+                                user_id,
                                 verb="New leave type is assigned to you",
                                 verb_ar="تم تعيين نوع إجازة جديد لك",
                                 verb_de="Dir wurde ein neuer Urlaubstyp zugewiesen",
@@ -1988,9 +1944,9 @@ def available_leave_update(request, id):
             available_leave = form.save()
             messages.success(request, _("Available leaves updated successfully..."))
             with contextlib.suppress(Exception):
-                notify.send(
+                send_notification(
                     request.user.employee_get,
-                    recipient=available_leave.employee_id.employee_user_id,
+                    available_leave.employee_id.employee_user_id,
                     verb=f"Your {available_leave.leave_type_id} leave type updated.",
                     verb_ar=f"تم تحديث نوع الإجازة {available_leave.leave_type_id} الخاص بك.",
                     verb_de=f"Ihr Urlaubstyp {available_leave.leave_type_id} wurde aktualisiert.",
@@ -2574,9 +2530,9 @@ def user_leave_request(request, id):
                     for manager in conditional_requests["managers"]:
                         managers.append(manager.employee_user_id)
                     with contextlib.suppress(Exception):
-                        notify.send(
+                        send_notification(
                             request.user.employee_get,
-                            recipient=managers[0],
+                            managers[0],
                             verb="You have a new leave request to validate.",
                             verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
                             verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
@@ -2591,9 +2547,9 @@ def user_leave_request(request, id):
                 mail_thread.start()
                 messages.success(request, _("Leave request created successfully.."))
                 with contextlib.suppress(Exception):
-                    notify.send(
+                    send_notification(
                         request.user.employee_get,
-                        recipient=leave_request.employee_id.employee_user_id,
+                        leave_request.employee_id.employee_user_id,
                         verb="You have a new leave request to validate.",
                         verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
                         verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
@@ -3486,9 +3442,9 @@ def leave_request_create(request):
                         for manager in conditional_requests["managers"]:
                             managers.append(manager.employee_user_id)
                         with contextlib.suppress(Exception):
-                            notify.send(
+                            send_notification(
                                 request.user.employee_get,
-                                recipient=managers[0],
+                                managers[0],
                                 verb="You have a new leave request to validate.",
                                 verb_ar="لديك طلب إجازة جديد يجب التحقق منه.",
                                 verb_de="Sie haben eine neue Urlaubsanfrage zur Validierung.",
@@ -3500,9 +3456,9 @@ def leave_request_create(request):
 
                     messages.success(request, _("Leave request created successfully.."))
                     with contextlib.suppress(Exception):
-                        notify.send(
+                        send_notification(
                             request.user.employee_get,
-                            recipient=leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
+                            leave_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
                             verb=f"New leave request created for {leave_request.employee_id}.",
                             verb_ar=f"تم إنشاء طلب إجازة جديد لـ {leave_request.employee_id}.",
                             verb_de=f"Neuer Urlaubsantrag für {leave_request.employee_id} erstellt.",
@@ -3670,9 +3626,9 @@ def leave_allocation_request_create(request):
             leave_allocation_request.save()
             messages.success(request, _("New Leave allocation request is created"))
             with contextlib.suppress(Exception):
-                notify.send(
+                send_notification(
                     request.user.employee_get,
-                    recipient=leave_allocation_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
+                    leave_allocation_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
                     verb=f"New leave allocation request created for {leave_allocation_request.employee_id}.",
                     verb_ar=f"تم إنشاء طلب تخصيص إجازة جديد لـ {leave_allocation_request.employee_id}.",
                     verb_de=f"Neue Anfrage zur Urlaubszuweisung erstellt für {leave_allocation_request.employee_id}.",
@@ -3818,9 +3774,9 @@ def leave_allocation_request_update(request, req_id):
                     request, _("Leave allocation request is updated successfully.")
                 )
                 with contextlib.suppress(Exception):
-                    notify.send(
+                    send_notification(
                         request.user.employee_get,
-                        recipient=leave_allocation_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
+                        leave_allocation_request.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
                         verb=f"Leave allocation request updated for {leave_allocation_request.employee_id}.",
                         verb_ar=f"تم تحديث طلب تخصيص الإجازة لـ {leave_allocation_request.employee_id}.",
                         verb_de=f"Urlaubszuteilungsanforderung aktualisiert für {leave_allocation_request.employee_id}.",
@@ -3886,9 +3842,9 @@ def leave_allocation_request_approve(request, req_id):
         leave_allocation_request.save()
         messages.success(request, _("Leave allocation request approved successfully"))
         with contextlib.suppress(Exception):
-            notify.send(
+            send_notification(
                 request.user.employee_get,
-                recipient=leave_allocation_request.employee_id.employee_user_id,
+                leave_allocation_request.employee_id.employee_user_id,
                 verb="Your leave allocation request has been approved",
                 verb_ar="تمت الموافقة على طلب تخصيص الإجازة الخاص بك",
                 verb_de="Ihr Antrag auf Urlaubszuweisung wurde genehmigt",
@@ -3946,9 +3902,9 @@ def leave_allocation_request_reject(request, req_id):
                     request, _("Leave allocation request rejected successfully")
                 )
                 with contextlib.suppress(Exception):
-                    notify.send(
+                    send_notification(
                         request.user.employee_get,
-                        recipient=leave_allocation_request.employee_id.employee_user_id,
+                        leave_allocation_request.employee_id.employee_user_id,
                         verb="Your leave allocation request has been rejected",
                         verb_ar="تم رفض طلب تخصيص الإجازة الخاص بك",
                         verb_de="Ihr Antrag auf Urlaubszuweisung wurde abgelehnt",
@@ -4370,9 +4326,9 @@ def create_leaverequest_comment(request, leave_id):
                         rec = (
                             leave.employee_id.employee_work_info.reporting_manager_id.employee_user_id
                         )
-                        notify.send(
+                        send_notification(
                             request.user.employee_get,
-                            recipient=rec,
+                            rec,
                             verb=f"{leave.employee_id}'s leave request has received a comment.",
                             verb_ar=f"تلقت طلب إجازة {leave.employee_id} تعليقًا.",
                             verb_de=f"{leave.employee_id}s Urlaubsantrag hat einen Kommentar erhalten.",
@@ -4386,9 +4342,9 @@ def create_leaverequest_comment(request, leave_id):
                         == leave.employee_id.employee_work_info.reporting_manager_id.id
                     ):
                         rec = leave.employee_id.employee_user_id
-                        notify.send(
+                        send_notification(
                             request.user.employee_get,
-                            recipient=rec,
+                            rec,
                             verb="Your leave request has received a comment.",
                             verb_ar="تلقى طلب إجازتك تعليقًا.",
                             verb_de="Ihr Urlaubsantrag hat einen Kommentar erhalten.",
@@ -4402,9 +4358,9 @@ def create_leaverequest_comment(request, leave_id):
                             leave.employee_id.employee_user_id,
                             leave.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
                         ]
-                        notify.send(
+                        send_notification(
                             request.user.employee_get,
-                            recipient=rec,
+                            rec,
                             verb=f"{leave.employee_id}'s leave request has received a comment.",
                             verb_ar=f"تلقت طلب إجازة {leave.employee_id} تعليقًا.",
                             verb_de=f"{leave.employee_id}s Urlaubsantrag hat einen Kommentar erhalten.",
@@ -4415,9 +4371,9 @@ def create_leaverequest_comment(request, leave_id):
                         )
                 else:
                     rec = leave.employee_id.employee_user_id
-                    notify.send(
+                    send_notification(
                         request.user.employee_get,
-                        recipient=rec,
+                        rec,
                         verb="Your leave request has received a comment.",
                         verb_ar="تلقى طلب إجازتك تعليقًا.",
                         verb_de="Ihr Urlaubsantrag hat einen Kommentar erhalten.",
@@ -4536,9 +4492,9 @@ def create_allocationrequest_comment(request, leave_id):
                         rec = (
                             leave.employee_id.employee_work_info.reporting_manager_id.employee_user_id
                         )
-                        notify.send(
+                        send_notification(
                             request.user.employee_get,
-                            recipient=rec,
+                            rec,
                             verb=f"{leave.employee_id}'s leave allocation request has received a comment.",
                             verb_ar=f"تلقت طلب تخصيص الإجازة لـ {leave.employee_id} تعليقًا.",
                             verb_de=f"{leave.employee_id}s Anfrage zur Urlaubszuweisung hat einen Kommentar erhalten.",
@@ -4553,9 +4509,9 @@ def create_allocationrequest_comment(request, leave_id):
                         == leave.employee_id.employee_work_info.reporting_manager_id.id
                     ):
                         rec = leave.employee_id.employee_user_id
-                        notify.send(
+                        send_notification(
                             request.user.employee_get,
-                            recipient=rec,
+                            rec,
                             verb="Your leave allocation request has received a comment.",
                             verb_ar="تلقى طلب تخصيص الإجازة الخاص بك تعليقًا.",
                             verb_de="Ihr Antrag auf Urlaubszuweisung hat einen Kommentar erhalten.",
@@ -4570,9 +4526,9 @@ def create_allocationrequest_comment(request, leave_id):
                             leave.employee_id.employee_user_id,
                             leave.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
                         ]
-                        notify.send(
+                        send_notification(
                             request.user.employee_get,
-                            recipient=rec,
+                            rec,
                             verb=f"{leave.employee_id}'s leave allocation request has received a comment.",
                             verb_ar=f"تلقت طلب تخصيص الإجازة لـ {leave.employee_id} تعليقًا.",
                             verb_de=f"{leave.employee_id}s Anfrage zur Urlaubszuweisung hat einen Kommentar erhalten.",
@@ -4584,9 +4540,9 @@ def create_allocationrequest_comment(request, leave_id):
                         )
                 else:
                     rec = leave.employee_id.employee_user_id
-                    notify.send(
+                    send_notification(
                         request.user.employee_get,
-                        recipient=rec,
+                        rec,
                         verb="Your leave allocation request has received a comment.",
                         verb_ar="تلقى طلب تخصيص الإجازة الخاص بك تعليقًا.",
                         verb_de="Ihr Antrag auf Urlaubszuweisung hat einen Kommentar erhalten.",
@@ -5165,18 +5121,6 @@ if apps.is_installed("attendance"):
                     redirect=reverse("view-compensatory-leave")
                     + f"?id={comp_leave_req.id}",
                 )
-                with contextlib.suppress(Exception):
-                    notify.send(
-                        request.user.employee_get,
-                        recipient=comp_leave_req.employee_id.employee_user_id,
-                        verb="Your compensatory leave request has been approved",
-                        verb_ar="تمت الموافقة على طلب الإجازة التعويضية",
-                        verb_de="Ihr Antrag auf Freizeitausgleich wurde genehmigt",
-                        verb_es="Se ha aprobado su solicitud de permiso compensatorio",
-                        verb_fr="Votre demande de congé compensatoire a été approuvée",
-                        redirect=reverse("view-compensatory-leave")
-                        + f"?id={comp_leave_req.id}",
-                    )
             else:
                 messages.info(
                     request,
@@ -5269,9 +5213,9 @@ if apps.is_installed("attendance"):
                             rec = (
                                 comp_leave.employee_id.employee_work_info.reporting_manager_id.employee_user_id
                             )
-                            notify.send(
+                            send_notification(
                                 request.user.employee_get,
-                                recipient=rec,
+                                rec,
                                 verb=f"{comp_leave.employee_id}'s Compensatory leave request has received a comment.",
                                 verb_ar=f"تلقت طلب إجازة الاعتذار لـ {comp_leave.employee_id} تعليقًا.",
                                 verb_de=f"Der Antrag auf Freizeitausgleich von {comp_leave.employee_id} hat einen Kommentar erhalten.",
@@ -5286,9 +5230,9 @@ if apps.is_installed("attendance"):
                             == comp_leave.employee_id.employee_work_info.reporting_manager_id.id
                         ):
                             rec = comp_leave.employee_id.employee_user_id
-                            notify.send(
+                            send_notification(
                                 request.user.employee_get,
-                                recipient=rec,
+                                rec,
                                 verb="Your compensatory leave request has received a comment.",
                                 verb_ar="تلقى طلب إجازة العوض الخاص بك تعليقًا.",
                                 verb_de="Ihr Antrag auf Freizeitausgleich hat einen Kommentar erhalten.",
@@ -5303,9 +5247,9 @@ if apps.is_installed("attendance"):
                                 comp_leave.employee_id.employee_user_id,
                                 comp_leave.employee_id.employee_work_info.reporting_manager_id.employee_user_id,
                             ]
-                            notify.send(
+                            send_notification(
                                 request.user.employee_get,
-                                recipient=rec,
+                                rec,
                                 verb=f"{comp_leave.employee_id}'s compensatory leave request has received a comment.",
                                 verb_ar=f"تلقت طلب إجازة التعويض لـ {comp_leave.employee_id} تعليقًا.",
                                 verb_de=f"Der Antrag auf Freizeitausgleich von {comp_leave.employee_id} hat einen Kommentar erhalten.",
@@ -5317,9 +5261,9 @@ if apps.is_installed("attendance"):
                             )
                     else:
                         rec = comp_leave.employee_id.employee_user_id
-                        notify.send(
+                        send_notification(
                             request.user.employee_get,
-                            recipient=rec,
+                            rec,
                             verb="Your compensatory leave request has received a comment.",
                             verb_ar="تلقى طلب إجازة العوض الخاص بك تعليقًا.",
                             verb_de="Ihr Antrag auf Freizeitausgleich hat einen Kommentar erhalten.",

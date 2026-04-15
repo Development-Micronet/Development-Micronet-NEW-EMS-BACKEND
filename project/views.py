@@ -22,8 +22,6 @@ from rest_framework.views import APIView
 from base.methods import filtersubordinates, get_key_instances
 from horilla.decorators import hx_request_required, login_required, permission_required
 from notifications.helpers import send_admin_notification, send_employee_notification
-from notifications.signals import notify
-from notifications.realtime import schedule_notification_snapshot_broadcast
 from project.cbv.projects import DynamicProjectCreationFormView
 from project.cbv.tasks import DynamicTaskCreateFormView
 from project.cbv.timesheet import TimeSheetFormView
@@ -214,8 +212,6 @@ def create_project(request):
                 level="success",
                 icon="folder-outline",
             )
-            for admin in User.objects.filter(is_superuser=True, is_active=True):
-                schedule_notification_snapshot_broadcast(admin)
             for employee in project.members.all().distinct():
                 # NOTIFY
                 send_employee_notification(
@@ -227,7 +223,6 @@ def create_project(request):
                     level="info",
                     icon="folder-open-outline",
                 )
-                schedule_notification_snapshot_broadcast(employee.employee_user_id)
             return JsonResponse({"success": True, "project_id": project.id})
         else:
             return JsonResponse({"success": False, "errors": form.errors}, status=400)
@@ -294,7 +289,6 @@ def change_project_status(request, project_id):
                             level="success",
                             icon="checkmark-circle-outline",
                         )
-                        schedule_notification_snapshot_broadcast(employee.employee_user_id)
                     # NOTIFY
                     send_admin_notification(
                         request.user,
@@ -304,8 +298,6 @@ def change_project_status(request, project_id):
                         level="success",
                         icon="checkmark-circle-outline",
                     )
-                    for admin in User.objects.filter(is_superuser=True, is_active=True):
-                        schedule_notification_snapshot_broadcast(admin)
                 # Notify all project managers and members
                 employees = (project.managers.all() | project.members.all()).distinct()
                 for employee in employees:
