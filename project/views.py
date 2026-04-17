@@ -2631,6 +2631,10 @@ class TaskNewAPIView(APIView):
 
     # 🔹 GET TASK (list or detail)
     def get(self, request, pk=None):
+        user = request.user
+        employee = getattr(user, "employee_get", None)
+
+        # 🔹 DETAIL VIEW
         if pk:
             try:
                 task = (
@@ -2644,18 +2648,48 @@ class TaskNewAPIView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            # 🔐 Permission check
+            if not user.is_staff:
+                if not employee or (
+                    employee not in task.task_managers.all()
+                    and employee not in task.task_members.all()
+                ):
+                    return Response(
+                        {"error": "You are not allowed to view this task"},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
             serializer = TaskNewReadSerializer(task)
             return Response(serializer.data)
 
-        tasks = (
-            TaskNew.objects.select_related("project")
-            .prefetch_related("task_managers", "task_members")
-            .all()
-        )
+        # 🔹 LIST VIEW
+        if user.is_staff:
+            # ✅ Admin → all tasks
+            tasks = (
+                TaskNew.objects.select_related("project")
+                .prefetch_related("task_managers", "task_members")
+                .all()
+            )
+        else:
+            # ✅ Employee → only assigned tasks
+            if not employee:
+                return Response(
+                    {"error": "Employee not linked to user"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            tasks = (
+                TaskNew.objects.select_related("project")
+                .prefetch_related("task_managers", "task_members")
+                .filter(
+                    Q(task_managers=employee) | Q(task_members=employee)
+                )
+                .distinct()
+            )
 
         serializer = TaskNewReadSerializer(tasks, many=True)
         return Response(serializer.data)
-
+        
     # 🔹 DELETE TASK
     @method_decorator(
         permission_required("project.delete_tasknew", raise_exception=True)
@@ -2804,6 +2838,9 @@ class TimeSheetNewAPIView(APIView):
 
     # 🔹 GET TIMESHEET (list or detail)
     def get(self, request, pk=None):
+        user = request.user
+
+        # 🔹 If specific timesheet requested
         if pk:
             try:
                 timesheet = TimeSheetNew.objects.select_related(
@@ -2815,12 +2852,28 @@ class TimeSheetNewAPIView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            # 🔐 Permission check
+            if not user.is_staff and timesheet.employee != user.employee_get:
+                return Response(
+                    {"error": "You are not allowed to view this time sheet"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
             serializer = TimeSheetNewReadSerializer(timesheet)
             return Response(serializer.data)
 
-        timesheets = TimeSheetNew.objects.select_related(
-            "employee", "task", "task__project"
-        ).all()
+    # 🔹 LIST VIEW
+        if user.is_staff:
+            # ✅ Admin → see all
+            timesheets = TimeSheetNew.objects.select_related(
+                "employee", "task", "task__project"
+            ).all()
+        else:
+            # ✅ Employee → see only their own
+            employee = user.employee_get
+            timesheets = TimeSheetNew.objects.select_related(
+                "employee", "task", "task__project"
+            ).filter(employee=employee)
 
         serializer = TimeSheetNewReadSerializer(timesheets, many=True)
         return Response(serializer.data)
