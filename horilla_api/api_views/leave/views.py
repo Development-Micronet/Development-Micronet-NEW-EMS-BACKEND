@@ -86,6 +86,7 @@ class EmployeeLeaveRequestGetCreateAPIView(APIView):
                 icon="people-circle",
                 redirect=f"/leave/request-view?id={leave_request.id}",
             )
+            print("[LEAVE-NOTIFY] Admin notified for leave request creation.")
             # Also notify the employee (self) for confirmation
             notify.send(
                 request.user.employee_get,
@@ -98,6 +99,7 @@ class EmployeeLeaveRequestGetCreateAPIView(APIView):
                 redirect=f"/leave/request-view?id={leave_request.id}",
                 icon="people-circle",
             )
+            print("[LEAVE-NOTIFY] Employee notified for leave request creation.")
             return Response(
                 userLeaveRequestGetAllSerilaizer(leave_request).data, status=201
             )
@@ -123,26 +125,37 @@ class EmployeeLeaveRequestUpdateDeleteAPIView(APIView):
     def put(self, request, pk):
         leave_request = self.get_leave_request(request, pk)
         employee_id = request.user.employee_get
-        if (
-            leave_request.status == "requested"
-            and leave_request.employee_id == employee_id
-        ):
-            data = request.data
-            if isinstance(data, QueryDict):
-                data = data.dict()
-            data["employee_id"] = employee_id.id
-            data["end_date"] = (
-                data.get("start_date")
-                if not data.get("end_date")
-                else data.get("end_date")
-            )
-            serializer = LeaveRequestCreateUpdateSerializer(leave_request, data=data)
-            if serializer.is_valid():
-                leave_request = serializer.save()
-                return Response(
-                    UserLeaveRequestGetSerilaizer(leave_request).data, status=201
+        data = request.data
+        if isinstance(data, QueryDict):
+            data = data.dict()
+        data["employee_id"] = employee_id.id
+        data["end_date"] = (
+            data.get("start_date")
+            if not data.get("end_date")
+            else data.get("end_date")
+        )
+        serializer = LeaveRequestCreateUpdateSerializer(leave_request, data=data)
+        if serializer.is_valid():
+            leave_request = serializer.save()
+            # Notify employee if leave is approved
+            if data.get("status") == "approved":
+                from notifications.helpers import send_employee_notification
+                send_employee_notification(
+                    actor=request.user,
+                    employee=leave_request.employee_id,
+                    verb="Your leave request has been approved.",
+                    description="Your leave request has been approved by admin.",
+                    target=leave_request,
+                    level="success",
+                    icon="checkmark-circle-outline",
+                    redirect=f"/leave/request-view?id={leave_request.id}",
                 )
-            return Response(serializer.errors, status=400)
+                print(f"[LEAVE-NOTIFY] Employee notified for leave approval (leave_id={leave_request.id}).")
+            return Response(
+                UserLeaveRequestGetSerilaizer(leave_request).data, status=201
+            )
+        return Response(serializer.errors, status=400)
+    
         raise serializers.ValidationError({"error": "Access Denied.."})
 
     def delete(self, request, pk):

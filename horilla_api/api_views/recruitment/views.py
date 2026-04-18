@@ -91,6 +91,25 @@ class RecruitmentPipelineAPIView(APIView):
             status=status.HTTP_204_NO_CONTENT,
         )
 
+class RecruitmentCarrersAPIView(APIView):
+
+
+    def get(self, request, pk=None):
+        queryset = Recruitment.objects.select_related(
+            "job_position_id", "company_id"
+        ).prefetch_related("recruitment_managers", "survey_templates", "skills")
+
+        if pk:
+            recruitment = get_object_or_404(queryset, pk=pk)
+            serializer = RecruitmentPipelineSerializer(recruitment)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        serializer = RecruitmentPipelineSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    
+
+ 
 
 class RecruitmentCandidateAPIView(APIView):
     permission_classes = [IsAuthenticated]

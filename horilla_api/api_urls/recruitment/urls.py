@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from recruitment.api_apply_now import ApplyNowViewSet
 from horilla_api.api_views.recruitment.views import (
+    RecruitmentCarrersAPIView,
     RecruitmentCandidateAPIView,
     RecruitmentInterviewAPIView,
     RecruitmentPipelineAPIView,
@@ -40,6 +41,11 @@ urlpatterns = [
         "recruitment-view/",
         RecruitmentPipelineAPIView.as_view(),
         name="recruitment-view-list",
+    ),
+    path(
+        "recruitment-carrers/",
+        RecruitmentCarrersAPIView.as_view(),
+        name="recruitment-carrer-list",
     ),
     path(
         "recruitment-view/<int:pk>/",

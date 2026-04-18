@@ -2579,9 +2579,9 @@ class TaskNewAPIView(APIView):
         )
 
     # 🔹 UPDATE TASK
-    @method_decorator(
-        permission_required("project.change_tasknew", raise_exception=True)
-    )
+    # @method_decorator(
+    #     permission_required("project.change_tasknew", raise_exception=True)
+    # )
     def put(self, request, pk):
         try:
             task = TaskNew.objects.get(pk=pk)

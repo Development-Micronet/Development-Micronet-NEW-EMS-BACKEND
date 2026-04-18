@@ -5575,6 +5575,17 @@ class AdminLeaveAPIView(APIView):
             employee=request.user.employee_get, **validated_data
         )
 
+        # --- Notification: Notify all admins of new leave request (with employee name) ---
+        from notifications.helpers import send_admin_notification
+        employee_name = leave.employee.employee_first_name
+        send_admin_notification(
+            actor=request.user,
+            verb="Leave Requested (by Admin)",
+            description=f"{employee_name} requested leave from {leave.start_date} to {leave.end_date}.",
+            target=leave,
+            level="info",
+        )
+
         return Response(
             {
                 "message": "Leave request submitted successfully",
@@ -5605,6 +5616,28 @@ class AdminLeaveAPIView(APIView):
             )
             serializer.is_valid(raise_exception=True)
             serializer.save()
+
+            # --- Notification: Notify employee if leave is approved or rejected ---
+            leave.refresh_from_db()
+            from notifications.helpers import send_employee_notification
+            if leave.status == "approved":
+                send_employee_notification(
+                    actor=request.user,
+                    employee=leave.employee,
+                    verb="Leave Approved",
+                    description=f"Your leave request from {leave.start_date} to {leave.end_date} has been approved.",
+                    target=leave,
+                    level="success",
+                )
+            elif leave.status == "rejected":
+                send_employee_notification(
+                    actor=request.user,
+                    employee=leave.employee,
+                    verb="Leave Rejected",
+                    description=f"Your leave request from {leave.start_date} to {leave.end_date} has been rejected.",
+                    target=leave,
+                    level="error",
+                )
 
             return Response(
                 {"message": "Leave status updated successfully"},
@@ -5682,6 +5715,17 @@ class EmployeeLeaveAPIView(APIView):
             employee=request.user.employee_get, **validated_data
         )
 
+        # --- Notification: Notify all admins of new leave request ---
+        from notifications.helpers import send_admin_notification
+        full_name = f"{request.user.employee_get.employee_first_name} {request.user.employee_get.employee_last_name or ''}".strip()
+        send_admin_notification(
+            actor=request.user,
+            verb=f"Leave Requested by {full_name}",
+            description=f"{full_name} requested leave from {leave.start_date} to {leave.end_date}.",
+            target=leave,
+            level="info",
+        )
+
         return Response(
             {
                 "message": "Leave request submitted successfully",
@@ -5722,6 +5766,20 @@ class EmployeeLeaveAPIView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
+
+        # --- Notification: If leave is approved, notify employee ---
+        # Refresh leave from DB to get updated status
+        leave.refresh_from_db()
+        if leave.status == "approved":
+            from notifications.helpers import send_employee_notification
+            send_employee_notification(
+                actor=request.user,
+                employee=leave.employee,
+                verb="Leave Approved",
+                description=f"Your leave request from {leave.start_date} to {leave.end_date} has been approved.",
+                target=leave,
+                level="success",
+            )
 
         return Response(
             {"message": "Leave request updated successfully"},
