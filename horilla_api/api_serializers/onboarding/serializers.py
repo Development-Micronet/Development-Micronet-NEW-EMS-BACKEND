@@ -1,6 +1,7 @@
 import base64
 from io import BytesIO
 import os
+from urllib.parse import urlparse
 from django.conf import settings
 from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.db import transaction
@@ -13,7 +14,7 @@ from base.backends import ConfiguredEmailBackend
 from base.models import BrevoEmailConfiguration, HorillaMailTemplate
 from base.models import Department, JobPosition
 from employee.models import Employee
-from recruitment.models import Candidate, Recruitment
+from recruitment.models import Candidate, Recruitment, Stage
 
 try:
     from brevo_email_sender import BrevoEmailSender
@@ -121,14 +122,63 @@ class JobPositionFlexibleField(serializers.RelatedField):
         return value.job_position
 
 
+class EmployeeFlexibleField(serializers.PrimaryKeyRelatedField):
+    def to_internal_value(self, data):
+        if data in (None, ""):
+            if self.allow_null:
+                return None
+            self.fail("required")
+
+        try:
+            return super().to_internal_value(data)
+        except serializers.ValidationError:
+            pass
+
+        candidate_values = []
+        if isinstance(data, dict):
+            candidate_values.extend(
+                [data.get("id"), data.get("employee_id"), data.get("user_id")]
+            )
+            email = data.get("email")
+            if email:
+                employee = Employee.objects.filter(email__iexact=email).first()
+                if employee:
+                    return employee
+        else:
+            candidate_values.append(data)
+
+        for candidate in candidate_values:
+            if candidate in (None, ""):
+                continue
+
+            candidate_str = str(candidate).strip()
+            if candidate_str.isdigit():
+                employee = Employee.objects.filter(
+                    employee_user_id__id=int(candidate_str)
+                ).first()
+                if employee:
+                    return employee
+
+            if isinstance(candidate, str):
+                employee = Employee.objects.filter(email__iexact=candidate_str).first()
+                if employee:
+                    return employee
+
+        self.fail("does_not_exist", pk_value=data)
+
+
 class OnboardingCandidateSerializer(serializers.ModelSerializer):
+    status = serializers.SerializerMethodField()
+    stage_id = serializers.PrimaryKeyRelatedField(
+        queryset=Stage.objects.all(), required=False, allow_null=True
+    )
     recruitment = RecruitmentFlexibleField(
         source="recruitment_id", queryset=Recruitment.objects.all()
     )
     job_position = JobPositionFlexibleField(
         source="job_position_id", queryset=JobPosition.objects.all()
     )
-    referral = serializers.PrimaryKeyRelatedField(
+    referral = EmployeeFlexibleField(
         queryset=Employee.objects.all(),
         required=False,
         allow_null=True,
@@ -157,41 +207,155 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             "source",
             "country",
             "state",
+            "city",
             "zip",
             "resume",
             "referral",
             "referral_data",
             "offer_letter_status",
+            "stage_id",
+            "status",
         ]
+
+    def get_status(self, obj):
+        # Return the stage_type if stage_id is set, else 'applied'
+        if hasattr(obj, 'stage_id') and obj.stage_id:
+            return getattr(obj.stage_id, 'stage_type', 'applied')
+        return "applied"
 
     def to_internal_value(self, data):
         if hasattr(data, "copy"):
             mutable = data.copy()
         else:
             mutable = dict(data)
+        self._pending_status = mutable.get("status", mutable.get("Status", serializers.empty))
         aliases = {
             "Name": "name",
             "Portfolio": "portfolio",
             "Email": "email",
             "Mobile": "mobile",
             "Recruitment": "recruitment",
+            "recruitment_id": "recruitment",
             "Job Position": "job_position",
+            "job_position_id": "job_position",
             "Date of Birth": "dob",
             "Gender": "gender",
             "Address": "address",
             "Source": "source",
             "Country": "country",
             "State": "state",
+            "City": "city",
             "Zip Code": "zip",
             "Resume": "resume",
             "Referral": "referral",
+            "referral_id": "referral",
+            "Status": "status",
             "Offer Letter": "offer_letter_status",
             "Offer Letter Status": "offer_letter_status",
         }
         for incoming_key, target_key in aliases.items():
             if incoming_key in mutable and target_key not in mutable:
                 mutable[target_key] = mutable[incoming_key]
+
+        resume_value = mutable.get("resume", serializers.empty)
+        if isinstance(resume_value, str):
+            normalized_resume = resume_value.strip()
+            if normalized_resume == "":
+                mutable["resume"] = None
+            elif self._is_existing_resume_reference(normalized_resume):
+                mutable.pop("resume", None)
+            else:
+                raise serializers.ValidationError(
+                    {
+                        "resume": [
+                            "Resume must be uploaded as a PDF file. Omit this field to keep the existing resume."
+                        ]
+                    }
+                )
         return super().to_internal_value(mutable)
+
+    def _is_existing_resume_reference(self, value):
+        instance = getattr(self, "instance", None)
+        current_resume = getattr(instance, "resume", None)
+        if not instance or not current_resume:
+            return False
+
+        candidates = {str(current_resume), current_resume.name}
+        try:
+            candidates.add(current_resume.url)
+        except ValueError:
+            pass
+
+        parsed_value = urlparse(value)
+        if parsed_value.path:
+            candidates.add(parsed_value.path)
+            candidates.add(parsed_value.path.lstrip("/"))
+
+        normalized_candidates = {item.strip().lstrip("/") for item in candidates if item}
+        return value.strip().lstrip("/") in normalized_candidates
+
+    def _normalize_status(self, value):
+        if value in (None, ""):
+            return None
+
+        normalized = str(value).strip().lower().replace(" ", "_")
+        alias_map = {"canceled": "cancelled"}
+        normalized = alias_map.get(normalized, normalized)
+
+        valid_statuses = {choice[0] for choice in Stage.stage_types}
+        display_map = {
+            str(label).strip().lower().replace(" ", "_"): key
+            for key, label in Stage.stage_types
+        }
+
+        if normalized in valid_statuses:
+            return normalized
+        if normalized in display_map:
+            return display_map[normalized]
+
+        raise serializers.ValidationError(
+            {
+                "status": [
+                    "Status must be one of initial, applied, test, interview, cancelled, or hired."
+                ]
+            }
+        )
+
+    def _resolve_stage_from_status(self, recruitment, normalized_status, stage=None):
+        if stage and stage.stage_type == normalized_status:
+            return stage
+
+        if not recruitment:
+            raise serializers.ValidationError(
+                {"status": ["Recruitment is required to resolve status."]}
+            )
+
+        resolved_stage = (
+            Stage.objects.filter(
+                recruitment_id=recruitment,
+                stage_type=normalized_status,
+            )
+            .order_by("sequence", "id")
+            .first()
+        )
+        if resolved_stage:
+            return resolved_stage
+
+        if normalized_status == "cancelled":
+            return Stage.objects.create(
+                recruitment_id=recruitment,
+                stage="Cancelled Candidates",
+                stage_type="cancelled",
+                sequence=50,
+            )
+
+        raise serializers.ValidationError(
+            {
+                "status": [
+                    f'No stage found for status "{normalized_status}" in this recruitment.'
+                ]
+            }
+        )
 
     def validate_offer_letter_status(self, value):
         if value in (None, ""):
@@ -247,12 +411,31 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        recruitment = attrs.get("recruitment_id")
+        recruitment = attrs.get("recruitment_id") or getattr(
+            self.instance, "recruitment_id", None
+        )
         job_position = attrs.get("job_position_id")
         if recruitment and job_position:
             # Candidate.save enforces job_position to be part of recruitment.open_positions.
             if not recruitment.open_positions.filter(id=job_position.id).exists():
                 recruitment.open_positions.add(job_position)
+
+        stage = attrs.get("stage_id")
+        pending_status = getattr(self, "_pending_status", serializers.empty)
+        if pending_status is not serializers.empty:
+            normalized_status = self._normalize_status(pending_status)
+            if normalized_status is not None:
+                stage = self._resolve_stage_from_status(
+                    recruitment=recruitment,
+                    normalized_status=normalized_status,
+                    stage=stage,
+                )
+                attrs["stage_id"] = stage
+
+        if stage:
+            attrs["hired"] = stage.stage_type == "hired"
+            attrs["canceled"] = stage.stage_type == "cancelled"
+            attrs["start_onboard"] = False
         return attrs
 
     def create(self, validated_data):

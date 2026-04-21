@@ -1,3 +1,4 @@
+from django.db.models import F
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -14,10 +15,20 @@ class OnboardingCandidateAPIView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
+    def _get_queryset(self):
+        return (
+            Candidate.objects.annotate(status=F("stage_id__stage_type"))
+            .filter(
+                status="hired",
+            )
+            .order_by("id")
+        )
+
     def get(self, request, pk=None):
+        queryset = self._get_queryset()
         if pk:
             try:
-                candidate = Candidate.objects.get(pk=pk)
+                candidate = queryset.get(pk=pk)
             except Candidate.DoesNotExist:
                 return Response(
                     {"error": "Candidate does not exist"},
@@ -26,11 +37,8 @@ class OnboardingCandidateAPIView(APIView):
             serializer = OnboardingCandidateSerializer(candidate)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
-        candidates = Candidate.objects.filter(
-            hired=True, recruitment_id__closed=False, is_active=True
-        ).order_by("id")
         serializer = OnboardingCandidateSerializer(
-            candidates, many=True, context={"request": request}
+            queryset, many=True, context={"request": request}
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -53,7 +61,7 @@ class OnboardingCandidateAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            candidate = Candidate.objects.get(pk=pk)
+            candidate = self._get_queryset().get(pk=pk)
         except Candidate.DoesNotExist:
             return Response(
                 {"error": "Candidate does not exist"},
@@ -78,7 +86,7 @@ class OnboardingCandidateAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            candidate = Candidate.objects.get(pk=pk)
+            candidate = self._get_queryset().get(pk=pk)
         except Candidate.DoesNotExist:
             return Response(
                 {"error": "Candidate does not exist"},
@@ -103,7 +111,7 @@ class OnboardingCandidateAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            candidate = Candidate.objects.get(pk=pk)
+            candidate = self._get_queryset().get(pk=pk)
         except Candidate.DoesNotExist:
             return Response(
                 {"error": "Candidate does not exist"},

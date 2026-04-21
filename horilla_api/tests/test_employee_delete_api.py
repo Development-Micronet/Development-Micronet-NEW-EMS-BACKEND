@@ -1,8 +1,11 @@
+from datetime import date
+from unittest.mock import patch
+
 from django.contrib.auth.models import Permission, User
+from django.db.models import ProtectedError
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from attendance.models import Attendance, AttendanceActivity
 from employee.models import Employee, EmployeeWorkInformation
 from payroll.models.models import Contract
 
@@ -20,19 +23,10 @@ class EmployeeDeleteAPITest(TestCase):
         self.employee = Employee.objects.create(
             employee_first_name="Tejash", email="tejash@example.com", phone="11111"
         )
-        Attendance.objects.create(
-            employee_id=self.employee, attendance_date="2026-02-02"
-        )
-        AttendanceActivity.objects.create(
-            employee_id=self.employee,
-            attendance_date="2026-02-02",
-            clock_in="15:00",
-            clock_out="15:01",
-        )
         Contract.objects.create(
             contract_name="Contract",
             employee_id=self.employee,
-            contract_start_date="2026-02-02",
+            contract_start_date=date(2026, 2, 2),
         )
 
     def test_delete_blocked_by_protected(self):
@@ -64,3 +58,31 @@ class EmployeeDeleteAPITest(TestCase):
 
         subordinate_work_info = EmployeeWorkInformation.objects.get(employee_id=subordinate)
         assert subordinate_work_info.reporting_manager_id is None
+
+    def test_force_delete_retries_after_protected_error_on_employee_delete(self):
+        manager = self.employee
+        subordinate = Employee.objects.create(
+            employee_first_name="Sub", email="sub2@example.com", phone="33333"
+        )
+        subordinate_work_info = EmployeeWorkInformation.objects.create(
+            employee_id=subordinate, reporting_manager_id=manager
+        )
+
+        original_delete = Employee.delete
+        state = {"raised": False}
+
+        def flaky_delete(instance, *args, **kwargs):
+            if instance.pk == manager.pk and not state["raised"]:
+                state["raised"] = True
+                raise ProtectedError("retryable protected relation", [subordinate_work_info])
+            return original_delete(instance, *args, **kwargs)
+
+        with patch.object(Employee, "delete", autospec=True, side_effect=flaky_delete):
+            response = self.client.delete(
+                f"/api/employee/employees/{manager.id}/?force=true"
+            )
+
+        assert response.status_code == 204
+        subordinate_work_info.refresh_from_db()
+        assert subordinate_work_info.reporting_manager_id is None
+        assert not Employee.objects.filter(pk=manager.pk).exists()

@@ -2017,10 +2017,13 @@ class AttendanceWorkRecordsAPIView(APIView):
 
         qs = WorkRecords.objects.entire().select_related(
             "employee_id", "attendance_id", "shift_id"
-        )
+        ).exclude(attendance_id__is_validate_request=True)
         attendance_qs = Attendance.objects.entire().select_related(
             "employee_id", "shift_id"
-        ).filter(attendance_clock_in__isnull=False)
+        ).filter(
+            attendance_clock_in__isnull=False,
+            is_validate_request=False,
+        )
         if not has_full_attendance_access(user):
             request_employee = getattr(user, "employee_get", None)
             if request_employee is None:

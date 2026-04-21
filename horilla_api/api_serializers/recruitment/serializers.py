@@ -719,13 +719,101 @@ class RecruitmentStageSerializer(serializers.ModelSerializer):
         return data
 
 
+# class RecruitmentInterviewSerializer(serializers.ModelSerializer):
+#     candidate = serializers.PrimaryKeyRelatedField(
+#         source="candidate_id", queryset=Recruitment.objects.none(), write_only=True
+#     )
+#     interviewers = serializers.PrimaryKeyRelatedField(
+#     source="employee_id",
+#     queryset=Employee._base_manager.all(),   # ✅ here only
+#     many=True,
+#     write_only=True
+# )
+#     candidate_data = serializers.SerializerMethodField(read_only=True)
+#     interviewers_data = serializers.SerializerMethodField(read_only=True)
+
+#     class Meta:
+#         model = InterviewSchedule
+#         fields = [
+#             "id",
+#             "candidate",
+#             "candidate_data",
+#             "interviewers",
+#             "interviewers_data",
+#             "interview_date",
+#             "interview_time",
+#             "description",
+#             "completed",
+#         ]
+
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         from recruitment.models import Candidate
+
+#         self.fields["candidate"].queryset = Candidate.objects.all()
+
+#     # def create(self, validated_data):
+#     #     interviewers = validated_data.pop("employee_id", [])
+#     #     instance = InterviewSchedule.objects.create(**validated_data)
+#     #     instance.employee_id.set(interviewers)
+#     #     return instance
+
+#     def create(self, validated_data):
+#         interviewers = validated_data.pop("employee_id", [])
+        
+#         print("🔥 Interviewers received:", interviewers)   # 👈 DEBUG
+        
+#         instance = InterviewSchedule.objects.create(**validated_data)
+#         instance.employee_id.set(interviewers)
+
+#         print("🔥 Saved interviewers:", instance.employee_id.all())  # 👈 DEBUG
+
+#         return instance
+
+#     def update(self, instance, validated_data):
+#         interviewers = validated_data.pop("employee_id", None)
+#         for attr, value in validated_data.items():
+#             setattr(instance, attr, value)
+#         instance.save()
+#         if interviewers is not None:
+#             instance.employee_id.set(interviewers)
+#         return instance
+
+#     def get_candidate_data(self, obj):
+#         candidate = obj.candidate_id
+#         return {
+#             "id": candidate.id,
+#             "name": candidate.name,
+#             "email": candidate.email,
+#         }
+
+#     def get_interviewers_data(self, obj):
+#         return [
+#             {"id": emp.id, "name": emp.get_full_name()}
+#             for emp in obj.employee_id.all()
+#         ]
+
+  
+#     def to_representation(self, instance):
+#         data = super().to_representation(instance)
+#         data["candidate"] = data.pop("candidate_data")
+#         data["interviewers"] = data.pop("interviewers_data")
+#         return data
+
 class RecruitmentInterviewSerializer(serializers.ModelSerializer):
     candidate = serializers.PrimaryKeyRelatedField(
-        source="candidate_id", queryset=Recruitment.objects.none(), write_only=True
+        source="candidate_id",
+        queryset=Recruitment.objects.none(),
+        write_only=True
     )
+
     interviewers = serializers.PrimaryKeyRelatedField(
-        source="employee_id", queryset=Employee.objects.all(), many=True, write_only=True
+        source="employee_id",
+        queryset=Employee._base_manager.all(),
+        many=True,
+        write_only=True
     )
+
     candidate_data = serializers.SerializerMethodField(read_only=True)
     interviewers_data = serializers.SerializerMethodField(read_only=True)
 
@@ -746,22 +834,47 @@ class RecruitmentInterviewSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         from recruitment.models import Candidate
-
         self.fields["candidate"].queryset = Candidate.objects.all()
 
+    # ✅ FIX: Handle multiple input formats
+    def to_internal_value(self, data):
+        interviewers = data.get("interviewers")
+        
+        if interviewers:
+            # If single value → convert to list
+            if isinstance(interviewers, str) and "," not in interviewers:
+                data["interviewers"] = [int(interviewers)]
+
+            # If comma-separated string → convert to list
+            elif isinstance(interviewers, str) and "," in interviewers:
+                data["interviewers"] = [int(i.strip()) for i in interviewers.split(",")]
+
+            # If tuple (form-data case)
+            elif isinstance(interviewers, tuple):
+                data["interviewers"] = list(interviewers)
+
+        print("🔥 INITIAL DATA:", data)
+        return super().to_internal_value(data)
+
     def create(self, validated_data):
-        interviewers = validated_data.pop("employee_id", [])
-        instance = InterviewSchedule.objects.create(**validated_data)
-        instance.employee_id.set(interviewers)
-        return instance
+        validated_data.pop("employee_id", None)  # ignore here
+        return InterviewSchedule.objects.create(**validated_data)
+
+
 
     def update(self, instance, validated_data):
         interviewers = validated_data.pop("employee_id", None)
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
+
         instance.save()
+
         if interviewers is not None:
-            instance.employee_id.set(interviewers)
+            instance.employee_id.clear()
+            for emp in interviewers:
+                instance.employee_id.add(emp)
+
         return instance
 
     def get_candidate_data(self, obj):
@@ -773,9 +886,11 @@ class RecruitmentInterviewSerializer(serializers.ModelSerializer):
         }
 
     def get_interviewers_data(self, obj):
+        # Get all interviewers including inactive ones by using the through model
+        through_objects = obj.employee_id.through.objects.filter(interviewschedule=obj)
         return [
-            {"id": employee.id, "name": employee.get_full_name()}
-            for employee in obj.employee_id.all()
+            {"id": through.employee.id, "name": through.employee.get_full_name()}
+            for through in through_objects
         ]
 
     def to_representation(self, instance):
@@ -783,6 +898,9 @@ class RecruitmentInterviewSerializer(serializers.ModelSerializer):
         data["candidate"] = data.pop("candidate_data")
         data["interviewers"] = data.pop("interviewers_data")
         return data
+
+
+        
 
 
 class RecruitmentSkillZoneSerializer(serializers.ModelSerializer):

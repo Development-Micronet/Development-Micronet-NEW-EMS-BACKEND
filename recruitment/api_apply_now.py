@@ -29,22 +29,9 @@ class ApplyNowViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
-        # Custom response for POST
         data = serializer.data
-        response_data = {
-            'Name': data.get('name'),
-            'Choose Job Position': data.get('job_position_id'),
-            'Email': data.get('email'),
-            'Phone': data.get('mobile') or '',
-            'Portfolio': data.get('portfolio'),
-            'Resume': data.get('resume'),
-            'Gender': data.get('gender'),
-            'Address': data.get('address'),
-            'Country': data.get('country'),
-            'State': data.get('state'),
-            'City': data.get('city'),
-            'Zip Code': data.get('zip') or '',
-        }
+        response_data = dict(data)
+        response_data['status'] = 'applied'
         return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
 
     def list(self, request, *args, **kwargs):

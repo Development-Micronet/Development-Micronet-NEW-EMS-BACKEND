@@ -27,6 +27,7 @@ class Base64FileField(serializers.FileField):
 
 class CandidateSerializer(serializers.ModelSerializer):
     resume = Base64FileField()
+    status = serializers.SerializerMethodField()
 
     class Meta:
         model = Candidate
@@ -45,5 +46,8 @@ class CandidateSerializer(serializers.ModelSerializer):
             'state',
             'city',
             'zip',
+            'status',
         ]
-        # Removed extra_kwargs to avoid required/default conflict
+
+    def get_status(self, obj):
+        return "applied"

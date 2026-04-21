@@ -227,3 +227,52 @@ class AttendanceRequestAPITest(TestCase):
         assert Notification.objects.filter(recipient=self.user).filter(
             verb__icontains="attendance request"
         ).filter(verb__icontains="validated").exists()
+
+    def test_pending_attendance_request_is_hidden_from_work_records_until_approved(self):
+        response = self.client.post(
+            "/api/attendance/attendance-request/",
+            self._build_payload(self.today),
+            format="json",
+        )
+
+        assert response.status_code == 200
+        attendance = Attendance.objects.get(
+            employee_id=self.employee,
+            attendance_date=self.today,
+        )
+
+        work_records_response = self.client.get(
+            "/api/attendance/attendance/work-records/",
+            {"month": self.today.strftime("%Y-%m")},
+            format="json",
+        )
+
+        assert work_records_response.status_code == 200
+        assert all(
+            not (
+                row["employee_id"] == self.employee.id
+                and row["date"] == str(self.today)
+            )
+            for row in work_records_response.json()
+        )
+
+        self.client.force_authenticate(user=self.approver_user)
+        approve_response = self.client.put(
+            f"/api/attendance/attendance-request-approve/{attendance.id}",
+            format="json",
+        )
+
+        assert approve_response.status_code == 200
+
+        self.client.force_authenticate(user=self.user)
+        approved_work_records_response = self.client.get(
+            "/api/attendance/attendance/work-records/",
+            {"month": self.today.strftime("%Y-%m")},
+            format="json",
+        )
+
+        assert approved_work_records_response.status_code == 200
+        assert any(
+            row["employee_id"] == self.employee.id and row["date"] == str(self.today)
+            for row in approved_work_records_response.json()
+        )

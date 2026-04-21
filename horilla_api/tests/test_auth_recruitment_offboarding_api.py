@@ -2,16 +2,17 @@ import time
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import resolve
 from django.test.utils import override_settings
 from rest_framework.test import APIClient
 
-from base.models import Company
+from base.models import Company, Department, JobPosition
 from employee.models import Employee
 from horilla.horilla_middlewares import _thread_locals
 from offboarding.models import Offboarding, ResignationLetter
-from recruitment.models import SurveyTemplate
+from recruitment.models import Candidate, Recruitment, Stage, SurveyTemplate
 
 
 class AuthRecruitmentOffboardingAPITest(TestCase):
@@ -172,6 +173,115 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
     def test_recruitment_interviews_url_resolves_to_new_api_view(self):
         match = resolve("/api/recruitment/interviews/")
         assert match.func.view_class.__name__ == "RecruitmentInterviewAPIView"
+
+    def test_recruitment_candidate_put_updates_stage_from_status(self):
+        self.client.force_authenticate(user=self.user)
+        department = Department.objects.create(department="Engineering")
+        job_position = JobPosition.objects.create(
+            job_position="Backend Engineer",
+            department_id=department,
+        )
+        recruitment = Recruitment.objects.create(
+            title="Backend Hiring",
+            description="Hiring for backend team",
+            is_event_based=True,
+            is_published=False,
+            vacancy=1,
+            company_id=self.company,
+        )
+        recruitment.open_positions.add(job_position)
+        applied_stage = recruitment.stage_set.get(stage_type="applied")
+        interview_stage = Stage.objects.create(
+            recruitment_id=recruitment,
+            stage="Interview",
+            stage_type="interview",
+            sequence=2,
+        )
+        candidate = Candidate.objects.create(
+            name="John Doe",
+            recruitment_id=recruitment,
+            job_position_id=job_position,
+            stage_id=applied_stage,
+            email="john.doe@example.com",
+            mobile="9999999999",
+            resume=SimpleUploadedFile(
+                "resume.pdf",
+                b"%PDF-1.4 test resume",
+                content_type="application/pdf",
+            ),
+        )
+
+        response = self.client.put(
+            f"/api/recruitment/candidates/{candidate.id}/",
+            {"status": "interview"},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        candidate.refresh_from_db()
+        assert candidate.stage_id_id == interview_stage.id
+        assert candidate.hired is False
+        assert candidate.canceled is False
+        assert response.json()["data"]["status"] == "interview"
+
+    def test_onboarding_candidates_list_filters_using_hired_status(self):
+        self.client.force_authenticate(user=self.user)
+        department = Department.objects.create(department="Onboarding Department")
+        job_position = JobPosition.objects.create(
+            job_position="Onboarding Engineer",
+            department_id=department,
+        )
+        recruitment = Recruitment.objects.create(
+            title="Onboarding Hiring",
+            description="Hiring for onboarding",
+            is_event_based=True,
+            is_published=False,
+            vacancy=2,
+            company_id=self.company,
+        )
+        recruitment.open_positions.add(job_position)
+        applied_stage = recruitment.stage_set.get(stage_type="applied")
+        hired_stage = Stage.objects.create(
+            recruitment_id=recruitment,
+            stage="Hired",
+            stage_type="hired",
+            sequence=3,
+        )
+        hired_candidate = Candidate.objects.create(
+            name="Hired Candidate",
+            recruitment_id=recruitment,
+            job_position_id=job_position,
+            stage_id=hired_stage,
+            email="hired.candidate@example.com",
+            mobile="9999999998",
+            hired=False,
+            resume=SimpleUploadedFile(
+                "hired_resume.pdf",
+                b"%PDF-1.4 hired",
+                content_type="application/pdf",
+            ),
+        )
+        Candidate.objects.create(
+            name="Pending Candidate",
+            recruitment_id=recruitment,
+            job_position_id=job_position,
+            stage_id=applied_stage,
+            email="pending.candidate@example.com",
+            mobile="9999999997",
+            hired=False,
+            resume=SimpleUploadedFile(
+                "pending_resume.pdf",
+                b"%PDF-1.4 pending",
+                content_type="application/pdf",
+            ),
+        )
+
+        response = self.client.get("/api/onboarding/candidates/")
+
+        assert response.status_code == 200
+        returned_ids = {row["id"] for row in response.json()}
+        assert hired_candidate.id in returned_ids
+        assert len(returned_ids) == 1
 
     def test_offboarding_stages_list_returns_stage_ids(self):
         self.client.force_authenticate(user=self.user)

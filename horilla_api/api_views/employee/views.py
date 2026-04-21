@@ -1,5 +1,6 @@
 from datetime import date
 
+from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.db.models import ProtectedError, Q
 from django.http import Http404
@@ -20,6 +21,7 @@ from employee.filters import (
 )
 from employee.models import (
     Actiontype,
+    BonusPoint,
     DisciplinaryAction,
     Employee,
     EmployeeBankDetails,
@@ -473,6 +475,8 @@ class EmployeeAPIView(APIView):
 
     @method_decorator(permission_required("employee.delete_employee"))
     def delete(self, request, pk):
+        UserModel = get_user_model()
+
         def _run_cleanup_step(operation):
             """
             Execute one best-effort cleanup step inside its own savepoint so a
@@ -485,20 +489,26 @@ class EmployeeAPIView(APIView):
                 return False
             return True
 
-        def _cleanup_employee_reverse_relations(employee_obj):
+        def _instance_identity(instance_obj):
+            return (instance_obj._meta.label_lower, instance_obj.pk)
+
+        def _cleanup_reverse_relations(instance_obj, lineage=None):
             """
             Best-effort cleanup for force delete:
             - clear M2M links
             - null nullable FK/O2O links
             - delete non-nullable related rows
             """
-            for rel in employee_obj._meta.related_objects:
+            lineage = set() if lineage is None else set(lineage)
+            lineage.add(_instance_identity(instance_obj))
+
+            for rel in instance_obj._meta.related_objects:
                 accessor_name = rel.get_accessor_name()
                 if not accessor_name:
                     continue
 
                 try:
-                    related_accessor = getattr(employee_obj, accessor_name)
+                    related_accessor = getattr(instance_obj, accessor_name)
                 except Exception:
                     continue
 
@@ -510,7 +520,12 @@ class EmployeeAPIView(APIView):
 
                 # Reverse FK (one employee -> many related rows)
                 if rel.one_to_many:
-                    queryset = related_accessor.all()
+                    try:
+                        queryset = rel.related_model._base_manager.filter(
+                            **{rel_field_name: instance_obj}
+                        )
+                    except Exception:
+                        continue
                     if rel.field.null:
                         _run_cleanup_step(
                             lambda qs=queryset, field=rel_field_name: qs.update(
@@ -518,13 +533,20 @@ class EmployeeAPIView(APIView):
                             )
                         )
                     else:
-                        _run_cleanup_step(lambda qs=queryset: qs.delete())
+                        for related_obj in queryset:
+                            _run_cleanup_step(
+                                lambda obj=related_obj, path=lineage: _force_delete_instance(
+                                    obj, path
+                                )
+                            )
                     continue
 
                 # Reverse one-to-one
                 if rel.one_to_one:
                     try:
-                        related_obj = related_accessor
+                        related_obj = rel.related_model._base_manager.get(
+                            **{rel_field_name: instance_obj}
+                        )
                     except rel.related_model.DoesNotExist:
                         continue
                     except Exception:
@@ -537,58 +559,70 @@ class EmployeeAPIView(APIView):
 
                         _run_cleanup_step(clear_one_to_one)
                     else:
-                        _run_cleanup_step(lambda obj=related_obj: obj.delete())
+                        _run_cleanup_step(
+                            lambda obj=related_obj, path=lineage: _force_delete_instance(
+                                obj, path
+                            )
+                        )
 
-        def _cleanup_user_reverse_relations(user_obj):
+        def _cleanup_employee_reverse_relations(employee_obj, lineage=None):
+            _cleanup_reverse_relations(employee_obj, lineage)
+
+        def _cleanup_user_reverse_relations(user_obj, lineage=None):
             """
             Best-effort cleanup for linked auth user references before deleting
             the user record. This is needed for older tables that still behave
             like DO_NOTHING/NO ACTION at the database level.
             """
-            for rel in user_obj._meta.related_objects:
-                accessor_name = rel.get_accessor_name()
-                if not accessor_name:
+            _cleanup_reverse_relations(user_obj, lineage)
+
+        def _nullify_reference_to_target(instance_obj, target_obj):
+            for field in instance_obj._meta.concrete_fields:
+                remote_field = getattr(field, "remote_field", None)
+                if remote_field is None or not getattr(field, "null", False):
                     continue
 
-                try:
-                    related_accessor = getattr(user_obj, accessor_name)
-                except Exception:
+                remote_model = getattr(remote_field.model, "_meta", None)
+                if remote_model is None:
                     continue
 
-                if rel.many_to_many:
-                    _run_cleanup_step(lambda accessor=related_accessor: accessor.clear())
+                if remote_field.model._meta.concrete_model != target_obj._meta.concrete_model:
                     continue
 
-                rel_field_name = rel.field.name
+                attname = getattr(field, "attname", None)
+                if attname is None or getattr(instance_obj, attname) != target_obj.pk:
+                    continue
 
-                if rel.one_to_many:
-                    queryset = related_accessor.all()
-                    if rel.field.null:
-                        _run_cleanup_step(
-                            lambda qs=queryset, field=rel_field_name: qs.update(
-                                **{field: None}
-                            )
+                def clear_reference(obj=instance_obj, field_name=field.name):
+                    setattr(obj, field_name, None)
+                    obj.save(update_fields=[field_name])
+
+                if _run_cleanup_step(clear_reference):
+                    return True
+
+            return False
+
+        def _delete_rows_by_fk_column(model, field_name, target_pk):
+            field = model._meta.get_field(field_name)
+            table_name = connection.ops.quote_name(model._meta.db_table)
+            column_name = connection.ops.quote_name(field.column)
+            try:
+                with transaction.atomic():
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            f"DELETE FROM {table_name} WHERE {column_name} = %s",
+                            [target_pk],
                         )
-                    else:
-                        _run_cleanup_step(lambda qs=queryset: qs.delete())
-                    continue
+            except ProgrammingError as exc:
+                error_text = str(exc).lower()
+                if "does not exist" not in error_text:
+                    raise
 
-                if rel.one_to_one:
-                    try:
-                        related_obj = related_accessor
-                    except rel.related_model.DoesNotExist:
-                        continue
-                    except Exception:
-                        continue
-
-                    if rel.field.null:
-                        def clear_user_one_to_one(obj=related_obj, field=rel_field_name):
-                            setattr(obj, field, None)
-                            obj.save(update_fields=[field])
-
-                        _run_cleanup_step(clear_user_one_to_one)
-                    else:
-                        _run_cleanup_step(lambda obj=related_obj: obj.delete())
+        def _get_employee_user(employee_obj):
+            user_pk = getattr(employee_obj, "employee_user_id_id", None)
+            if not user_pk:
+                return None
+            return UserModel.objects.filter(pk=user_pk).first()
 
         def _delete_instance_with_missing_relation_fallback(instance):
             """
@@ -614,6 +648,36 @@ class EmployeeAPIView(APIView):
                         [instance.pk],
                     )
 
+        def _force_delete_instance(instance_obj, lineage=None):
+            lineage = set() if lineage is None else set(lineage)
+            instance_identity = _instance_identity(instance_obj)
+            if instance_identity in lineage:
+                return False
+
+            lineage.add(instance_identity)
+
+            for _ in range(20):
+                _cleanup_reverse_relations(instance_obj, lineage)
+                try:
+                    _delete_instance_with_missing_relation_fallback(instance_obj)
+                    return True
+                except ProtectedError as exc:
+                    progress_made = False
+                    for protected_obj in list(exc.protected_objects):
+                        if _nullify_reference_to_target(protected_obj, instance_obj):
+                            progress_made = True
+                            continue
+
+                        if _force_delete_instance(protected_obj, lineage):
+                            progress_made = True
+
+                    if not progress_made:
+                        raise
+
+            raise ProtectedError(
+                "Deletion blocked by protected related records.", [instance_obj]
+            )
+
         try:
             employee = Employee.objects.get(pk=pk)
             force_delete = (
@@ -628,6 +692,7 @@ class EmployeeAPIView(APIView):
                 with transaction.atomic():
                     AttendanceActivity.objects.filter(employee_id=employee).delete()
                     Attendance.objects.filter(employee_id=employee).delete()
+                    _delete_rows_by_fk_column(BonusPoint, "employee_id", employee.pk)
 
                     if apps.is_installed("payroll"):
                         from payroll.models.models import Contract
@@ -649,7 +714,9 @@ class EmployeeAPIView(APIView):
                         Answer.objects.filter(employee_id=employee).delete()
                         KeyResultFeedback.objects.filter(employee_id=employee).delete()
                         MeetingsAnswer.objects.filter(employee_id=employee).delete()
-                        EmployeeBonusPoint.objects.filter(employee_id=employee).delete()
+                        _delete_rows_by_fk_column(
+                            EmployeeBonusPoint, "employee_id", employee.pk
+                        )
                         Feedback.objects.filter(employee_id=employee).delete()
                         Feedback.objects.filter(manager_id=employee).delete()
                         EmployeeObjective.objects.filter(employee_id=employee).delete()
@@ -657,14 +724,13 @@ class EmployeeAPIView(APIView):
                     # Safety net: remove/null any remaining reverse relations.
                     _cleanup_employee_reverse_relations(employee)
 
-                    user = employee.employee_user_id
-                    _delete_instance_with_missing_relation_fallback(employee)
+                    user = _get_employee_user(employee)
+                    _force_delete_instance(employee)
                     if user:
-                        _cleanup_user_reverse_relations(user)
-                        _delete_instance_with_missing_relation_fallback(user)
+                        _force_delete_instance(user)
                     return Response(status=status.HTTP_204_NO_CONTENT)
 
-            user = employee.employee_user_id
+            user = _get_employee_user(employee)
             _delete_instance_with_missing_relation_fallback(employee)
             if user:
                 _cleanup_user_reverse_relations(user)
@@ -818,7 +884,7 @@ class EmployeeListAPIView(APIView):
     )
     def get(self, request):
         search = request.query_params.get("search")
-
+        print("helloo form emp")
         # 🔹 Exclude soft deleted employees
         employees_queryset = Employee.objects.get_queryset()
         if any(field.name == "is_deleted" for field in Employee._meta.fields):
