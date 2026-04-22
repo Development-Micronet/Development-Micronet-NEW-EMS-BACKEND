@@ -721,7 +721,21 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         assert response.json()["error"] == "Permission denied"
 
     def test_offboarding_stage_create_returns_connected_exit_process(self):
-        self.client.force_authenticate(user=self.user)
+        admin_user = User.objects.create_user(
+            username="offboardingstageadmin",
+            password="password",
+            is_staff=True,
+            email="offboardingstageadmin@example.com",
+        )
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Stage",
+            employee_last_name="Admin",
+            email="stage.admin@example.com",
+            phone="7777777700",
+            role="admin",
+        )
+        self.client.force_authenticate(user=admin_user)
         offboarding = Offboarding.objects.create(
             title="Exit Process",
             description="Standard exit workflow",
@@ -734,7 +748,7 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
                 "offboarding": offboarding.id,
                 "title": "Exit Interview",
                 "type": "interview",
-                "managers": [self.employee.id],
+                "managers": [admin_user.id],
             },
             format="json",
         )
@@ -744,6 +758,9 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         assert data["offboarding"]["id"] == offboarding.id
         assert data["offboarding"]["title"] == "Exit Process"
         assert data["title"] == "Exit Interview"
+        assert data["managers"] == [
+            {"id": admin_employee.id, "name": admin_employee.get_full_name()}
+        ]
 
     def test_offboarding_employee_create_accepts_user_id_in_employee_field(self):
         self.client.force_authenticate(user=self.user)

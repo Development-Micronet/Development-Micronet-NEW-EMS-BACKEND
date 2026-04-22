@@ -610,6 +610,9 @@ class OffboardingStageSerializer(serializers.ModelSerializer):
         source="offboarding_id", queryset=Offboarding.objects.all()
     )
     type = serializers.CharField()
+    managers = AdminManagerRelatedField(
+        queryset=Employee.objects.all(), many=True, required=False
+    )
 
     class Meta:
         model = OffboardingStage
