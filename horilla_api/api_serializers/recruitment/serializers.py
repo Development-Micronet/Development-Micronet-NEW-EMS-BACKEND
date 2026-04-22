@@ -763,13 +763,47 @@ class RecruitmentStageSerializer(serializers.ModelSerializer):
             "title": obj.recruitment_id.title,
         }
 
+    def _get_stage_manager_employees(self, obj):
+        stage_manager_ids = list(
+            obj.stage_managers.through.objects.filter(stage_id=obj.id).values_list(
+                "employee_id", flat=True
+            )
+        )
+        stage_managers = [
+            employee
+            for employee_id, employee in Employee._base_manager.in_bulk(stage_manager_ids).items()
+            if employee_id in stage_manager_ids
+        ]
+        if stage_managers:
+            employee_map = {employee.id: employee for employee in stage_managers}
+            return [
+                employee_map[employee_id]
+                for employee_id in stage_manager_ids
+                if employee_id in employee_map
+            ]
+        if obj.recruitment_id:
+            recruitment_manager_ids = list(
+                obj.recruitment_id.recruitment_managers.through.objects.filter(
+                    recruitment_id=obj.recruitment_id.id
+                ).values_list("employee_id", flat=True)
+            )
+            recruitment_manager_map = Employee._base_manager.in_bulk(
+                recruitment_manager_ids
+            )
+            return [
+                recruitment_manager_map[employee_id]
+                for employee_id in recruitment_manager_ids
+                if employee_id in recruitment_manager_map
+            ]
+        return []
+
     def get_stage_managers_data(self, obj):
         return [
             {
                 "id": employee.id,
                 "name": employee.get_full_name(),
             }
-            for employee in obj.stage_managers.all()
+            for employee in self._get_stage_manager_employees(obj)
         ]
 
     def to_representation(self, instance):

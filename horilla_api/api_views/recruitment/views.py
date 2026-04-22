@@ -455,7 +455,7 @@ class RecruitmentStageAPIView(APIView):
 
     def get(self, request, pk=None):
         queryset = Stage.objects.select_related("recruitment_id").prefetch_related(
-            "stage_managers"
+            "stage_managers", "recruitment_id__recruitment_managers"
         ).order_by("sequence", "id")
         if pk:
             instance = get_object_or_404(queryset, pk=pk)

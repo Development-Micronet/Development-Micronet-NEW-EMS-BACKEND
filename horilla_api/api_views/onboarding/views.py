@@ -17,9 +17,12 @@ class OnboardingCandidateAPIView(APIView):
 
     def _get_queryset(self):
         return (
-            Candidate.objects.annotate(status=F("stage_id__stage_type"))
+            Candidate.objects.select_related(
+                "recruitment_id", "job_position_id", "stage_id", "referral"
+            ).annotate(status=F("stage_id__stage_type"))
             .filter(
-                status="hired",
+                hired=True,
+                recruitment_id__closed=False,
             )
             .order_by("id")
         )
