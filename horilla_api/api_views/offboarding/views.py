@@ -450,6 +450,49 @@ class ResignationRequestAPIView(APIView):
         except Exception:
             pass
 
+    def _get_or_create_exit_process(self, employee):
+        work_info = getattr(employee, "employee_work_info", None)
+        company_id = getattr(work_info, "company_id", None) if work_info else None
+
+        if company_id:
+            offboarding = Offboarding.objects.filter(company_id=company_id).order_by(
+                "id"
+            ).first()
+        else:
+            offboarding = Offboarding.objects.filter(company_id__isnull=True).order_by(
+                "id"
+            ).first()
+
+        if offboarding:
+            return offboarding
+
+        return Offboarding.objects.create(
+            title="Exit Process",
+            description="Auto-created for resignation",
+            company_id=company_id,
+        )
+
+    def _sync_resignation_to_exit_process(self, instance):
+        planned_date = instance.planned_to_leave_on
+        if not planned_date:
+            from datetime import date
+
+            today = date.today()
+            instance.planned_to_leave_on = today
+            instance.save(update_fields=["planned_to_leave_on"])
+        else:
+            today = planned_date
+
+        offboarding = self._get_or_create_exit_process(instance.employee_id)
+        notice_period_starts = instance.planned_to_leave_on or today
+        notice_period_ends = notice_period_starts
+
+        instance.to_offboarding_employee(
+            offboarding=offboarding,
+            notice_period_starts=notice_period_starts,
+            notice_period_ends=notice_period_ends,
+        )
+
     def get(self, request, pk=None):
         if pk:
             try:
@@ -472,6 +515,8 @@ class ResignationRequestAPIView(APIView):
         serializer = ResignationRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         instance = serializer.save()
+        self._sync_resignation_to_exit_process(instance)
+
         self._send_resignation_mail(instance, "Created")
         return Response(
             ResignationRequestSerializer(instance).data,
@@ -495,6 +540,7 @@ class ResignationRequestAPIView(APIView):
         serializer = ResignationRequestSerializer(instance, data=request.data)
         serializer.is_valid(raise_exception=True)
         updated = serializer.save()
+        self._sync_resignation_to_exit_process(updated)
         if updated.status != old_status:
             self._send_resignation_mail(updated, "Status Updated")
         return Response(

@@ -491,7 +491,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
         email_backend = ConfiguredEmailBackend()
         sender_email = getattr(
             email_backend, "dynamic_mail_sent_from", None
-        ) or getattr(email_backend, "dynamic_username", None)
+        ) or getattr(email_backend, "dynamic_username", None) or "noreply@acetechnologies.com"
         if sender_email:
             return formataddr((ACE_RECRUITMENT_FROM_NAME, sender_email))
         return ACE_RECRUITMENT_FROM_NAME

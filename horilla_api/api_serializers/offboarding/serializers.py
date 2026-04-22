@@ -299,6 +299,11 @@ class OffboardingSerializer(serializers.ModelSerializer):
             return [request_employee]
         return []
 
+    def _get_offboarding_employees(self, instance):
+        return OffboardingEmployee.objects.filter(stage_id__offboarding_id=instance).select_related(
+            "employee_id", "stage_id"
+        ).order_by("-id")
+
     def create(self, validated_data):
         if not validated_data.get("title"):
             validated_data["title"] = "Offboarding"
@@ -333,6 +338,7 @@ class OffboardingSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         managers = self._get_fallback_managers(instance)
+        employees = self._get_offboarding_employees(instance)
         return {
             "id": instance.id,
             "title": instance.title,
@@ -350,6 +356,7 @@ class OffboardingSerializer(serializers.ModelSerializer):
                 if instance.company_id
                 else None
             ),
+            "employees": OffboardingEmployeeSerializer(employees, many=True).data,
         }
 
 

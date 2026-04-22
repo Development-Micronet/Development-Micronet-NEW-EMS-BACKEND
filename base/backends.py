@@ -18,6 +18,14 @@ from horilla.horilla_middlewares import _thread_locals
 logger = logging.getLogger(__name__)
 
 
+def _fallback_sender_email():
+    return (
+        getattr(settings, "DEFAULT_FROM_EMAIL", None)
+        or getattr(settings, "EMAIL_HOST_USER", None)
+        or "noreply@acetechnologies.com"
+    )
+
+
 class DefaultHorillaMailBackend(EmailBackend):
     def __init__(
         self,
@@ -136,7 +144,7 @@ class DefaultHorillaMailBackend(EmailBackend):
         return (
             self.configuration.from_email
             if self.configuration
-            else getattr(settings, "DEFAULT_FROM_EMAIL", None)
+            else _fallback_sender_email()
         )
 
     @property
@@ -148,7 +156,7 @@ class DefaultHorillaMailBackend(EmailBackend):
         return (
             f"{self.dynamic_display_name} <{self.dynamic_mail_sent_from}>"
             if self.dynamic_display_name
-            else self.dynamic_mail_sent_from
+            else (self.dynamic_mail_sent_from or _fallback_sender_email())
         )
 
     @property
@@ -211,9 +219,14 @@ class ConfiguredEmailBackend(BACKEND_CLASS):
     def send_messages(self, email_messages):
         response = super(BACKEND_CLASS, self).send_messages(email_messages)
         for message in email_messages:
+            sender = (
+                getattr(message, "from_email", None)
+                or self.dynamic_from_email_with_display_name
+                or _fallback_sender_email()
+            )
             email_log = EmailLog(
                 subject=message.subject,
-                from_email=self.dynamic_from_email_with_display_name,
+                from_email=sender,
                 to=message.to,
                 body=message.body,
                 status="sent" if response else "failed",
@@ -259,7 +272,7 @@ def new_init(
         reply_to = cache.get(f"reply_to{user_id}") if not reply_to else reply_to
 
     if not from_email:
-        from_email = cache.get(f"dynamic_display_name{user_id}")
+        from_email = cache.get(f"dynamic_display_name{user_id}") or _fallback_sender_email()
 
     message_init(
         self,

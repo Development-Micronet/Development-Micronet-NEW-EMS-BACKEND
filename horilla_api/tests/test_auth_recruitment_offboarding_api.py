@@ -888,6 +888,61 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
             "name": target_employee.get_full_name(),
         }
 
+    def test_exit_process_lists_employees_created_from_multiple_resignation_requests(self):
+        self.client.force_authenticate(user=self.user)
+        target_user = User.objects.create_user(
+            username="secondresignee",
+            password="password",
+            email="secondresignee@example.com",
+        )
+        target_employee = Employee.objects.create(
+            employee_user_id=target_user,
+            employee_first_name="Second",
+            employee_last_name="Resignee",
+            email="second.resignee@example.com",
+            phone="7777777722",
+        )
+
+        first_response = self.client.post(
+            "/api/offboarding/resignation-requests/",
+            {
+                "employee": self.user.id,
+                "title": "First Resignation",
+                "description": "First employee resignation.",
+                "planned_to_leave_on": "2026-04-15",
+                "status": "requested",
+            },
+            format="json",
+        )
+        second_response = self.client.post(
+            "/api/offboarding/resignation-requests/",
+            {
+                "employee": target_user.id,
+                "title": "Second Resignation",
+                "description": "Second employee resignation.",
+                "planned_to_leave_on": "2026-04-16",
+                "status": "requested",
+            },
+            format="json",
+        )
+
+        assert first_response.status_code == 201
+        assert second_response.status_code == 201
+
+        response = self.client.get("/api/offboarding/exit-process/")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["title"] == "Exit Process"
+
+        employee_ids = {
+            row["employee"]["id"]
+            for row in data[0]["employees"]
+            if row.get("employee") is not None
+        }
+        assert employee_ids == {self.employee.id, target_employee.id}
+
     def test_survey_template_create_falls_back_when_company_pk_is_invalid(self):
         self.client.force_authenticate(user=self.user)
 
