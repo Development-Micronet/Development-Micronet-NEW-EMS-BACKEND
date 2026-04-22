@@ -23,6 +23,13 @@ from offboarding.models import (
 class ExitProcessAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def _has_admin_access(self, request):
+        user = request.user
+        if getattr(user, "is_superuser", False) or getattr(user, "is_staff", False):
+            return True
+        employee = getattr(user, "employee_get", None)
+        return bool(employee and getattr(employee, "role", None) == "admin")
+
     def get(self, request, pk=None):
         if pk:
             try:
@@ -33,15 +40,23 @@ class ExitProcessAPIView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
             return Response(
-                OffboardingSerializer(instance).data, status=status.HTTP_200_OK
+                OffboardingSerializer(instance, context={"request": request}).data,
+                status=status.HTTP_200_OK,
             )
 
         queryset = Offboarding.objects.all().order_by("-id")
-        serializer = OffboardingSerializer(queryset, many=True)
+        serializer = OffboardingSerializer(
+            queryset, many=True, context={"request": request}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
-        serializer = OffboardingSerializer(data=request.data)
+        if not self._has_admin_access(request):
+            return Response(
+                {"error": "Permission denied"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        serializer = OffboardingSerializer(data=request.data, context={"request": request})
         if serializer.is_valid():
             instance = serializer.save()
             return Response(
@@ -50,6 +65,11 @@ class ExitProcessAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request, pk=None):
+        if not self._has_admin_access(request):
+            return Response(
+                {"error": "Permission denied"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if not pk:
             return Response(
                 {"error": "Exit Process ID is required for update."},
@@ -63,7 +83,9 @@ class ExitProcessAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        serializer = OffboardingSerializer(instance, data=request.data)
+        serializer = OffboardingSerializer(
+            instance, data=request.data, context={"request": request}
+        )
         if serializer.is_valid():
             updated = serializer.save()
             return Response(
@@ -72,6 +94,11 @@ class ExitProcessAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def patch(self, request, pk=None):
+        if not self._has_admin_access(request):
+            return Response(
+                {"error": "Permission denied"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if not pk:
             return Response(
                 {"error": "Exit Process ID is required for partial update."},
@@ -85,7 +112,9 @@ class ExitProcessAPIView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        serializer = OffboardingSerializer(instance, data=request.data, partial=True)
+        serializer = OffboardingSerializer(
+            instance, data=request.data, partial=True, context={"request": request}
+        )
         if serializer.is_valid():
             updated = serializer.save()
             return Response(
@@ -94,6 +123,11 @@ class ExitProcessAPIView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk=None):
+        if not self._has_admin_access(request):
+            return Response(
+                {"error": "Permission denied"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if not pk:
             return Response(
                 {"error": "Exit Process ID is required for delete."},
@@ -136,7 +170,9 @@ class OffboardingEmployeeAPIView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
-        serializer = OffboardingEmployeeSerializer(data=request.data)
+        serializer = OffboardingEmployeeSerializer(
+            data=request.data, context={"request": request}
+        )
         if serializer.is_valid():
             instance = serializer.save()
             return Response(
@@ -158,8 +194,9 @@ class OffboardingEmployeeAPIView(APIView):
                 {"error": "Offboarding employee does not exist."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-
-        serializer = OffboardingEmployeeSerializer(instance, data=request.data)
+        serializer = OffboardingEmployeeSerializer(
+            instance, data=request.data, context={"request": request}
+        )
         if serializer.is_valid():
             updated = serializer.save()
             return Response(

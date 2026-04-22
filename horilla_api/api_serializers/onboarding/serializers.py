@@ -1,6 +1,7 @@
 import base64
 from io import BytesIO
 import os
+from email.utils import formataddr
 from urllib.parse import urlparse
 from django.conf import settings
 from django.core.mail import EmailMessage, EmailMultiAlternatives
@@ -24,6 +25,7 @@ except ImportError:
     BREVO_AVAILABLE = False
 
 OFFER_LETTER_TEMPLATE_TITLE = "Offer Letter"
+ACE_RECRUITMENT_FROM_NAME = "Ace Technologies Recruitment Team"
 OFFER_LETTER_TEMPLATE_BODY = """
 <div style="font-family: 'Times New Roman', serif; color: #111827; line-height: 1.65;">
   <p>To,</p>
@@ -450,6 +452,8 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         previous_status = instance.offer_letter_status
+        previous_stage_type = getattr(getattr(instance, "stage_id", None), "stage_type", None)
+        status_provided = getattr(self, "_pending_status", serializers.empty)
         with transaction.atomic():
             candidate = super().update(instance, validated_data)
             self._handle_offer_letter_status(
@@ -457,7 +461,125 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
                 previous_status=previous_status,
                 status_provided="offer_letter_status" in validated_data,
             )
+            self._handle_pending_status_email(
+                candidate=candidate,
+                previous_stage_type=previous_stage_type,
+                status_provided=status_provided is not serializers.empty,
+            )
             return candidate
+
+    def _handle_pending_status_email(
+        self, candidate, previous_stage_type=None, status_provided=False
+    ):
+        if not status_provided:
+            return
+
+        current_stage_type = getattr(getattr(candidate, "stage_id", None), "stage_type", None)
+        if current_stage_type == previous_stage_type:
+            return
+
+        if current_stage_type == "cancelled":
+            self._send_candidate_rejection_mail(candidate)
+        elif current_stage_type == "interview":
+            self._send_candidate_interview_stage_mail(candidate)
+
+    def _get_company_name(self, candidate):
+        company = getattr(getattr(candidate, "recruitment_id", None), "company_id", None)
+        return getattr(company, "company", None) or "Ace Technologies"
+
+    def _get_recruitment_from_email(self):
+        email_backend = ConfiguredEmailBackend()
+        sender_email = getattr(
+            email_backend, "dynamic_mail_sent_from", None
+        ) or getattr(email_backend, "dynamic_username", None)
+        if sender_email:
+            return formataddr((ACE_RECRUITMENT_FROM_NAME, sender_email))
+        return ACE_RECRUITMENT_FROM_NAME
+
+    def _send_candidate_rejection_mail(self, candidate):
+        if not getattr(candidate, "email", None):
+            return
+
+        company_name = self._get_company_name(candidate)
+        job_position = getattr(getattr(candidate, "job_position_id", None), "job_position", "the role")
+        subject = f"{company_name} | Application Update"
+        body = f"""
+        <div style="background:#f6f8fb;padding:32px 16px;font-family:Arial,sans-serif;color:#101828;">
+            <div style="max-width:700px;margin:0 auto;background:#ffffff;border:1px solid #d7deea;border-radius:18px;overflow:hidden;">
+                <div style="background:linear-gradient(135deg,#1f2937,#334155);padding:24px 32px;">
+                    <p style="margin:0;color:#e2e8f0;font-size:13px;letter-spacing:.08em;text-transform:uppercase;">{company_name}</p>
+                    <h1 style="margin:10px 0 0;color:#ffffff;font-size:28px;line-height:1.25;">Application Update</h1>
+                </div>
+                <div style="padding:32px;">
+                    <p style="margin:0 0 16px;color:#344054;line-height:1.7;">Dear {candidate.name},</p>
+                    <p style="margin:0 0 16px;color:#344054;line-height:1.7;">
+                        Thank you for your interest in the <strong>{job_position}</strong> opportunity at <strong>{company_name}</strong>.
+                    </p>
+                    <p style="margin:0 0 16px;color:#344054;line-height:1.7;">
+                        After careful consideration, we regret to inform you that we will not be moving forward with your application at this time.
+                    </p>
+                    <p style="margin:0 0 16px;color:#344054;line-height:1.7;">
+                        We appreciate the time and effort you invested in the process and encourage you to apply again for future opportunities that match your profile.
+                    </p>
+                    <p style="margin:0;color:#344054;line-height:1.7;">
+                        Kind regards,<br>
+                        Talent Acquisition Team<br>
+                        {company_name}
+                    </p>
+                </div>
+            </div>
+        </div>
+        """
+        email = EmailMessage(
+            subject=subject,
+            body=body,
+            from_email=self._get_recruitment_from_email(),
+            to=[candidate.email],
+            connection=ConfiguredEmailBackend(),
+        )
+        email.content_subtype = "html"
+        email.send(fail_silently=False)
+
+    def _send_candidate_interview_stage_mail(self, candidate):
+        if not getattr(candidate, "email", None):
+            return
+
+        company_name = self._get_company_name(candidate)
+        job_position = getattr(getattr(candidate, "job_position_id", None), "job_position", "the role")
+        subject = f"{company_name} | Interview Process Update"
+        body = f"""
+        <div style="background:#f6f8fb;padding:32px 16px;font-family:Arial,sans-serif;color:#101828;">
+            <div style="max-width:700px;margin:0 auto;background:#ffffff;border:1px solid #d7deea;border-radius:18px;overflow:hidden;">
+                <div style="background:linear-gradient(135deg,#0f172a,#1d4ed8);padding:24px 32px;">
+                    <p style="margin:0;color:#dbeafe;font-size:13px;letter-spacing:.08em;text-transform:uppercase;">{company_name}</p>
+                    <h1 style="margin:10px 0 0;color:#ffffff;font-size:28px;line-height:1.25;">You have been shortlisted for the interview stage</h1>
+                </div>
+                <div style="padding:32px;">
+                    <p style="margin:0 0 16px;color:#344054;line-height:1.7;">Dear {candidate.name},</p>
+                    <p style="margin:0 0 16px;color:#344054;line-height:1.7;">
+                        We are pleased to inform you that your application for the <strong>{job_position}</strong> position at <strong>{company_name}</strong> has progressed to the interview stage.
+                    </p>
+                    <p style="margin:0 0 16px;color:#344054;line-height:1.7;">
+                        Our recruitment team will share the interview schedule and next steps with you shortly.
+                    </p>
+                    <p style="margin:0;color:#344054;line-height:1.7;">
+                        Best regards,<br>
+                        Talent Acquisition Team<br>
+                        {company_name}
+                    </p>
+                </div>
+            </div>
+        </div>
+        """
+        email = EmailMessage(
+            subject=subject,
+            body=body,
+            from_email=self._get_recruitment_from_email(),
+            to=[candidate.email],
+            connection=ConfiguredEmailBackend(),
+        )
+        email.content_subtype = "html"
+        email.send(fail_silently=False)
 
     def _handle_offer_letter_status(
         self, candidate, previous_status=None, status_provided=False
@@ -561,7 +683,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
         if BREVO_AVAILABLE:
             api_key = getattr(settings, "BREVO_API_KEY", "").strip()
             from_email = getattr(settings, "BREVO_FROM_EMAIL", "noreply@horilla.com")
-            from_name = getattr(settings, "BREVO_FROM_NAME", "HR Management")
+            from_name = ACE_RECRUITMENT_FROM_NAME
             if not api_key:
                 brevo_config = BrevoEmailConfiguration.objects.filter(
                     is_active=True
@@ -569,7 +691,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
                 if brevo_config:
                     api_key = brevo_config.api_key
                     from_email = brevo_config.from_email
-                    from_name = brevo_config.from_name
+                    from_name = ACE_RECRUITMENT_FROM_NAME
 
             if api_key:
                 try:
@@ -619,9 +741,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
 
         try:
             email_backend = ConfiguredEmailBackend()
-            from_email = getattr(
-                email_backend, "dynamic_from_email_with_display_name", None
-            )
+            from_email = self._get_recruitment_from_email()
             print(
                 f"[OfferLetter] Trying SMTP send to {candidate.email} "
                 f"with from_email={from_email}"

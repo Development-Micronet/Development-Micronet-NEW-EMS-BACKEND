@@ -1,5 +1,6 @@
 from datetime import date
 
+from django.contrib.auth.models import User
 from django.db import IntegrityError
 from rest_framework import serializers
 
@@ -21,15 +22,147 @@ from offboarding.models import (
 )
 
 
+class AdminManagerRelatedField(serializers.PrimaryKeyRelatedField):
+    default_error_messages = {
+        "does_not_exist": 'Invalid pk "{pk_value}" - object does not exist.',
+        "not_admin": "Managers must reference admin users only.",
+        "incorrect_type": "Incorrect type. Expected pk value, received {data_type}.",
+    }
+
+    def _ensure_admin_employee_for_user(self, user):
+        if not (user.is_superuser or user.is_staff):
+            self.fail("not_admin")
+        employee, _created = Employee.objects.get_or_create(
+            employee_user_id=user,
+            defaults={
+                "employee_first_name": user.first_name or user.username,
+                "employee_last_name": user.last_name or "",
+                "email": user.email or f"{user.username}-{user.id}@example.com",
+                "phone": "0000000000",
+                "role": "admin",
+            },
+        )
+        updates = {}
+        if employee.role != "admin":
+            updates["role"] = "admin"
+        if not employee.email:
+            updates["email"] = user.email or f"{user.username}-{user.id}@example.com"
+        if not employee.phone:
+            updates["phone"] = "0000000000"
+        if updates:
+            Employee.objects.filter(pk=employee.pk).update(**updates)
+            for field, value in updates.items():
+                setattr(employee, field, value)
+        return employee
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            data = data.get("user_id") or data.get("employee_id") or data.get("id")
+        if isinstance(data, str):
+            data = data.strip()
+        if isinstance(data, bool) or not isinstance(data, (str, int)):
+            self.fail("incorrect_type", data_type=type(data).__name__)
+        if isinstance(data, str):
+            if not data.isdigit():
+                self.fail("does_not_exist", pk_value=data)
+            data = int(data)
+
+        user = User.objects.filter(pk=data).first()
+        if user:
+            employee = Employee.objects.filter(employee_user_id=user).first()
+            if employee:
+                user = getattr(employee, "employee_user_id", None)
+                if user and (user.is_superuser or user.is_staff):
+                    return employee
+                if user and user.groups.filter(name="Admin User").exists():
+                    return employee
+                if employee.role == "admin":
+                    return employee
+                self.fail("not_admin")
+            if user.groups.filter(name="Admin User").exists():
+                employee = Employee.objects.filter(employee_user_id=user).first()
+                if employee:
+                    return employee
+            return self._ensure_admin_employee_for_user(user)
+
+        employee = Employee.objects.filter(pk=data).first()
+        if employee:
+            user = getattr(employee, "employee_user_id", None)
+            if user and (user.is_superuser or user.is_staff):
+                return employee
+            if user and user.groups.filter(name="Admin User").exists():
+                return employee
+            if employee.role == "admin":
+                return employee
+            self.fail("not_admin")
+
+        self.fail("does_not_exist", pk_value=data)
+
+
+class UserOrEmployeeRelatedField(serializers.PrimaryKeyRelatedField):
+    default_error_messages = {
+        "does_not_exist": 'Invalid pk "{pk_value}" - object does not exist.',
+        "incorrect_type": "Incorrect type. Expected pk value, received {data_type}.",
+    }
+
+    def _ensure_employee_for_admin_user(self, user):
+        if not (user.is_superuser or user.is_staff):
+            self.fail("does_not_exist", pk_value=user.pk)
+        employee, _created = Employee.objects.get_or_create(
+            employee_user_id=user,
+            defaults={
+                "employee_first_name": user.first_name or user.username,
+                "employee_last_name": user.last_name or "",
+                "email": user.email or f"{user.username}-{user.id}@example.com",
+                "phone": "0000000000",
+                "role": "admin",
+            },
+        )
+        updates = {}
+        if not employee.email:
+            updates["email"] = user.email or f"{user.username}-{user.id}@example.com"
+        if not employee.phone:
+            updates["phone"] = "0000000000"
+        if (user.is_superuser or user.is_staff) and employee.role != "admin":
+            updates["role"] = "admin"
+        if updates:
+            Employee.objects.filter(pk=employee.pk).update(**updates)
+            for field, value in updates.items():
+                setattr(employee, field, value)
+        return employee
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            data = data.get("user_id") or data.get("employee_id") or data.get("id")
+        if isinstance(data, str):
+            data = data.strip()
+        if isinstance(data, bool) or not isinstance(data, (str, int)):
+            self.fail("incorrect_type", data_type=type(data).__name__)
+        if isinstance(data, str):
+            if not data.isdigit():
+                self.fail("does_not_exist", pk_value=data)
+            data = int(data)
+
+        user = User.objects.filter(pk=data).first()
+        if user:
+            linked_employee = Employee.objects.filter(employee_user_id=user).first()
+            if linked_employee:
+                return linked_employee
+            return self._ensure_employee_for_admin_user(user)
+
+        employee = Employee.objects.filter(pk=data).first()
+        if employee:
+            return employee
+
+        self.fail("does_not_exist", pk_value=data)
+
+
 class OffboardingSerializer(serializers.ModelSerializer):
     company = serializers.PrimaryKeyRelatedField(
         source="company_id", queryset=Company.objects.all(), required=False
     )
-    managers = serializers.PrimaryKeyRelatedField(
+    managers = AdminManagerRelatedField(
         queryset=Employee.objects.all(), many=True, required=False
-    )
-    manager_users = serializers.ListField(
-        child=serializers.IntegerField(), write_only=True, required=False
     )
     status = serializers.CharField(required=False)
 
@@ -40,7 +173,6 @@ class OffboardingSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "managers",
-            "manager_users",
             "status",
             "company",
         ]
@@ -58,13 +190,27 @@ class OffboardingSerializer(serializers.ModelSerializer):
             "Title": "title",
             "Description": "description",
             "Managers": "managers",
-            "Manager Users": "manager_users",
             "Status": "status",
             "Company": "company",
         }
         for incoming, target in aliases.items():
             if incoming in mutable and target not in mutable:
                 mutable[target] = mutable[incoming]
+        mutable.pop("manager_users", None)
+        mutable.pop("Manager Users", None)
+        if "managers" in mutable:
+            manager_values = (
+                mutable.getlist("managers")
+                if hasattr(mutable, "getlist")
+                else mutable.get("managers")
+            )
+            if not isinstance(manager_values, list):
+                manager_values = [manager_values]
+            normalized_managers = self._normalize_manager_values(manager_values)
+            if hasattr(mutable, "setlist"):
+                mutable.setlist("managers", [str(value) for value in normalized_managers])
+            else:
+                mutable["managers"] = normalized_managers
         company_value = mutable.get("company")
         if company_value not in (None, ""):
             try:
@@ -83,16 +229,75 @@ class OffboardingSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Status must be Ongoing or Completed.")
         return status_map[value]
 
+    def _is_admin_employee(self, employee):
+        user = getattr(employee, "employee_user_id", None)
+        if user and (user.is_superuser or user.is_staff):
+            return True
+        if user and user.groups.filter(name="Admin User").exists():
+            return True
+        return employee.role == "admin"
+
+    def _normalize_manager_values(self, manager_values):
+        normalized = []
+        for value in manager_values:
+            if value in (None, ""):
+                continue
+            if isinstance(value, dict):
+                value = (
+                    value.get("user_id")
+                    or value.get("employee_id")
+                    or value.get("id")
+                )
+            if isinstance(value, str):
+                value = value.strip()
+            if isinstance(value, int) or (
+                isinstance(value, str) and value.isdigit()
+            ):
+                lookup_value = int(value)
+                employee = Employee.objects.filter(
+                    employee_user_id__id=lookup_value
+                ).first()
+                if employee and self._is_admin_employee(employee):
+                    normalized.append(employee.pk)
+                    continue
+                employee = Employee.objects.filter(pk=lookup_value).first()
+                if employee and self._is_admin_employee(employee):
+                    normalized.append(employee.pk)
+                    continue
+            normalized.append(value)
+        return normalized
+
+    def validate_managers(self, value):
+        invalid_managers = [
+            manager.id for manager in value if not self._is_admin_employee(manager)
+        ]
+        if invalid_managers:
+            raise serializers.ValidationError(
+                f"Managers must reference admin users only. Invalid employee ids: {invalid_managers}"
+            )
+        return list({manager.id: manager for manager in value}.values())
+
     def _collect_managers(self, validated_data):
         managers = list(validated_data.pop("managers", []))
-        manager_users = validated_data.pop("manager_users", [])
-        if manager_users:
-            user_managers = Employee.objects.filter(
-                employee_user_id__id__in=manager_users
-            )
-            managers.extend(list(user_managers))
-        unique_managers = list({manager.id: manager for manager in managers}.values())
-        return unique_managers
+        return list({manager.id: manager for manager in managers}.values())
+
+    def _get_fallback_managers(self, instance):
+        managers = list(instance.managers.all())
+        if managers:
+            return managers
+
+        created_by = getattr(instance, "created_by", None)
+        created_by_employee = getattr(created_by, "employee_get", None)
+        if created_by_employee and self._is_admin_employee(created_by_employee):
+            return [created_by_employee]
+
+        request = self.context.get("request")
+        request_employee = getattr(
+            getattr(request, "user", None), "employee_get", None
+        )
+        if request_employee and self._is_admin_employee(request_employee):
+            return [request_employee]
+        return []
 
     def create(self, validated_data):
         if not validated_data.get("title"):
@@ -104,15 +309,20 @@ class OffboardingSerializer(serializers.ModelSerializer):
                 Company.objects.filter(pk=1).first() or Company.objects.first()
             )
         managers = self._collect_managers(validated_data)
+        if not managers:
+            request = self.context.get("request")
+            request_employee = getattr(
+                getattr(request, "user", None), "employee_get", None
+            )
+            if request_employee and self._is_admin_employee(request_employee):
+                managers = [request_employee]
         offboarding = Offboarding.objects.create(**validated_data)
         if managers:
             offboarding.managers.set(managers)
         return offboarding
 
     def update(self, instance, validated_data):
-        managers_provided = (
-            "managers" in validated_data or "manager_users" in validated_data
-        )
+        managers_provided = "managers" in validated_data
         managers = self._collect_managers(validated_data) if managers_provided else None
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
@@ -122,13 +332,14 @@ class OffboardingSerializer(serializers.ModelSerializer):
         return instance
 
     def to_representation(self, instance):
+        managers = self._get_fallback_managers(instance)
         return {
             "id": instance.id,
             "title": instance.title,
             "description": instance.description,
             "managers": [
                 {"id": manager.id, "name": manager.get_full_name()}
-                for manager in instance.managers.all()
+                for manager in managers
             ],
             "status": instance.status,
             "company": (
@@ -143,7 +354,7 @@ class OffboardingSerializer(serializers.ModelSerializer):
 
 
 class OffboardingEmployeeSerializer(serializers.ModelSerializer):
-    employee = serializers.PrimaryKeyRelatedField(
+    employee = UserOrEmployeeRelatedField(
         source="employee_id", queryset=Employee.objects.all(), required=False
     )
     offboarding = serializers.PrimaryKeyRelatedField(
@@ -551,7 +762,7 @@ class OffboardingManagerStatusSerializer(serializers.ModelSerializer):
 
 
 class ResignationRequestSerializer(serializers.ModelSerializer):
-    employee = serializers.PrimaryKeyRelatedField(
+    employee = UserOrEmployeeRelatedField(
         source="employee_id", queryset=Employee.objects.all()
     )
     status = serializers.CharField(required=False)

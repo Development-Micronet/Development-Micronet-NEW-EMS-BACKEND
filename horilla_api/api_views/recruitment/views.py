@@ -1,4 +1,5 @@
 import logging
+from email.utils import formataddr
 
 from django.core.mail import EmailMessage
 from django.shortcuts import get_object_or_404
@@ -34,6 +35,22 @@ from recruitment.models import (
 )
 
 logger = logging.getLogger(__name__)
+ACE_RECRUITMENT_FROM_NAME = "Ace Technologies Recruitment Team"
+
+
+def _get_company_name(candidate):
+    company = getattr(getattr(candidate, "recruitment_id", None), "company_id", None)
+    return getattr(company, "company", None) or "Ace Technologies"
+
+
+def _get_recruitment_from_email():
+    email_backend = ConfiguredEmailBackend()
+    sender_email = getattr(email_backend, "dynamic_mail_sent_from", None) or getattr(
+        email_backend, "dynamic_username", None
+    )
+    if sender_email:
+        return formataddr((ACE_RECRUITMENT_FROM_NAME, sender_email))
+    return ACE_RECRUITMENT_FROM_NAME
 
 
 def _format_interview_date(value):
@@ -79,11 +96,12 @@ def _send_interview_schedule_email(interview, is_update=False):
     interview_time = escape(_format_interview_time(interview.interview_time))
     candidate_name = escape(candidate.name)
     interviewer_text = escape(interviewer_text)
+    company_name = escape(_get_company_name(candidate))
     schedule_label = "updated" if is_update else "scheduled"
     subject = (
-        f"Interview {schedule_label.capitalize()} - {recruitment_title}"
+        f"{company_name} | Interview {schedule_label.capitalize()} - {recruitment_title}"
         if recruitment_title
-        else f"Interview {schedule_label.capitalize()}"
+        else f"{company_name} | Interview {schedule_label.capitalize()}"
     )
     description_block = ""
     if interview.description:
@@ -94,11 +112,11 @@ def _send_interview_schedule_email(interview, is_update=False):
         """
 
     body = f"""
-    <div style="background:#f4f7fb;padding:32px 16px;font-family:Arial,sans-serif;color:#101828;">
-        <div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #e4e7ec;border-radius:16px;overflow:hidden;">
-            <div style="background:#0f172a;padding:24px 32px;">
-                <p style="margin:0;color:#cbd5e1;font-size:13px;letter-spacing:.08em;text-transform:uppercase;">
-                    Interview Invitation
+    <div style="background:#f6f8fb;padding:32px 16px;font-family:Arial,sans-serif;color:#101828;">
+        <div style="max-width:700px;margin:0 auto;background:#ffffff;border:1px solid #d7deea;border-radius:18px;overflow:hidden;">
+            <div style="background:linear-gradient(135deg,#0f172a,#1d4ed8);padding:24px 32px;">
+                <p style="margin:0;color:#dbeafe;font-size:13px;letter-spacing:.08em;text-transform:uppercase;">
+                    {company_name}
                 </p>
                 <h1 style="margin:10px 0 0;color:#ffffff;font-size:28px;line-height:1.25;">
                     Your interview has been {schedule_label}.
@@ -109,21 +127,22 @@ def _send_interview_schedule_email(interview, is_update=False):
                     Dear {candidate_name},
                 </p>
                 <p style="margin:0 0 16px;color:#344054;line-height:1.7;">
-                    Thank you for your interest in <strong>{recruitment_title}</strong>.
-                    We are pleased to invite you to the next step of the selection process.
+                    Thank you for your interest in <strong>{recruitment_title}</strong> at <strong>{company_name}</strong>.
+                    We are pleased to move forward with your application and invite you to the interview stage.
                 </p>
-                <div style="margin:24px 0;padding:20px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0;">
+                <div style="margin:24px 0;padding:22px;border-radius:14px;background:#f8fbff;border:1px solid #dbe4f0;">
                     <p style="margin:0 0 10px;color:#0f172a;"><strong>Date:</strong> {interview_date}</p>
                     <p style="margin:0 0 10px;color:#0f172a;"><strong>Time:</strong> {interview_time}</p>
                     <p style="margin:0 0 10px;color:#0f172a;"><strong>Interviewers:</strong> {interviewer_text}</p>
                 </div>
                 {description_block}
                 <p style="margin:0 0 16px;color:#344054;line-height:1.7;">
-                    Please be available a few minutes before the scheduled time. If you need to reschedule or have any questions, simply reply to this email.
+                    Please be available a few minutes before the scheduled time. If you need any assistance or would like to request a reschedule, simply reply to this email.
                 </p>
                 <p style="margin:0;color:#344054;line-height:1.7;">
-                    Regards,<br>
-                    Recruitment Team
+                    Best regards,<br>
+                    Talent Acquisition Team<br>
+                    {company_name}
                 </p>
             </div>
         </div>
@@ -133,6 +152,7 @@ def _send_interview_schedule_email(interview, is_update=False):
     email = EmailMessage(
         subject=subject,
         body=body,
+        from_email=_get_recruitment_from_email(),
         to=[candidate_email],
         connection=ConfiguredEmailBackend(),
     )
@@ -227,7 +247,9 @@ class RecruitmentCandidateAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = OnboardingCandidateSerializer(data=request.data)
+        serializer = OnboardingCandidateSerializer(
+            data=request.data, context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
         candidate = serializer.save()
         return Response(
@@ -241,11 +263,15 @@ class RecruitmentCandidateAPIView(APIView):
     def get(self, request, pk=None):
         if pk:
             candidate = get_object_or_404(Candidate, pk=pk)
-            serializer = OnboardingCandidateSerializer(candidate)
+            serializer = OnboardingCandidateSerializer(
+                candidate, context={"request": request}
+            )
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         candidates = Candidate.objects.all().order_by("-id")
-        serializer = OnboardingCandidateSerializer(candidates, many=True)
+        serializer = OnboardingCandidateSerializer(
+            candidates, many=True, context={"request": request}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, pk=None):
@@ -256,13 +282,17 @@ class RecruitmentCandidateAPIView(APIView):
             )
 
         candidate = get_object_or_404(Candidate, pk=pk)
-        serializer = OnboardingCandidateSerializer(candidate, data=request.data, partial=True)
+        serializer = OnboardingCandidateSerializer(
+            candidate, data=request.data, partial=True, context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
         updated_candidate = serializer.save()
         return Response(
             {
                 "message": "Candidate updated successfully",
-                "data": OnboardingCandidateSerializer(updated_candidate).data,
+                "data": OnboardingCandidateSerializer(
+                    updated_candidate, context={"request": request}
+                ).data,
             },
             status=status.HTTP_200_OK,
         )
@@ -471,7 +501,9 @@ class RecruitmentInterviewAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = RecruitmentInterviewSerializer(data=request.data)
+        serializer = RecruitmentInterviewSerializer(
+            data=request.data, context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
 
         interview = serializer.save()
@@ -486,7 +518,13 @@ class RecruitmentInterviewAPIView(APIView):
         # Refresh from DB to ensure M2M is up-to-date for serialization
         interview.refresh_from_db()
 
-        print("FINAL SAVED:", interview.employee_id.get_queryset())
+        try:
+            _send_interview_schedule_email(interview, is_update=False)
+        except Exception:
+            logger.exception(
+                "Failed to send interview email for interview id=%s",
+                interview.pk,
+            )
 
         return Response({
             "message": "Interview created successfully",

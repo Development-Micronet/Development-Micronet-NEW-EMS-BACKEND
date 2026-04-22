@@ -174,6 +174,85 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         match = resolve("/api/recruitment/interviews/")
         assert match.func.view_class.__name__ == "RecruitmentInterviewAPIView"
 
+    def test_recruitment_stage_create_accepts_admin_user_id_in_stage_managers(self):
+        self.client.force_authenticate(user=self.user)
+        admin_user = User.objects.create_user(
+            username="recruitstageadmin",
+            password="password",
+            is_staff=True,
+            email="recruitstageadmin@example.com",
+        )
+        department = Department.objects.create(department="Recruitment Department")
+        job_position = JobPosition.objects.create(
+            job_position="Recruiter",
+            department_id=department,
+        )
+        recruitment = Recruitment.objects.create(
+            title="Stage Hiring",
+            description="Hiring pipeline",
+            is_event_based=True,
+            is_published=False,
+            vacancy=1,
+            company_id=self.company,
+        )
+        recruitment.open_positions.add(job_position)
+
+        response = self.client.post(
+            "/api/recruitment/stage-view/",
+            {
+                "recruitment": recruitment.id,
+                "stage_managers": [admin_user.id],
+                "stage": "Manager Review",
+                "stage_type": "interview",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        created_employee = Employee.objects.get(employee_user_id=admin_user)
+        assert response.json()["data"]["stage_managers"] == [
+            {"id": created_employee.id, "name": created_employee.get_full_name()}
+        ]
+
+    def test_recruitment_stage_create_returns_field_error_for_duplicate_stage(self):
+        self.client.force_authenticate(user=self.user)
+        department = Department.objects.create(department="Duplicate Stage Department")
+        job_position = JobPosition.objects.create(
+            job_position="Duplicate Stage Role",
+            department_id=department,
+        )
+        recruitment = Recruitment.objects.create(
+            title="Duplicate Stage Hiring",
+            description="Hiring pipeline",
+            is_event_based=True,
+            is_published=False,
+            vacancy=1,
+            company_id=self.company,
+        )
+        recruitment.open_positions.add(job_position)
+        Stage.objects.create(
+            recruitment_id=recruitment,
+            stage="Manager Review",
+            stage_type="interview",
+            sequence=10,
+        )
+
+        response = self.client.post(
+            "/api/recruitment/stage-view/",
+            {
+                "recruitment": recruitment.id,
+                "stage_managers": [self.employee.id],
+                "stage": "Manager Review",
+                "stage_type": "interview",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {
+            "stage": ["This stage already exists for the selected recruitment."]
+        }
+
     def test_recruitment_candidate_put_updates_stage_from_status(self):
         self.client.force_authenticate(user=self.user)
         department = Department.objects.create(department="Engineering")
@@ -223,6 +302,149 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         assert candidate.hired is False
         assert candidate.canceled is False
         assert response.json()["data"]["status"] == "interview"
+
+    @patch("horilla_api.api_views.recruitment.views._send_interview_schedule_email")
+    def test_recruitment_interview_post_sends_professional_schedule_email(self, mock_send):
+        self.client.force_authenticate(user=self.user)
+        department = Department.objects.create(department="Interview Department")
+        job_position = JobPosition.objects.create(
+            job_position="QA Engineer",
+            department_id=department,
+        )
+        recruitment = Recruitment.objects.create(
+            title="Interview Hiring",
+            description="Hiring for interviews",
+            is_event_based=True,
+            is_published=False,
+            vacancy=1,
+            company_id=self.company,
+        )
+        recruitment.open_positions.add(job_position)
+        candidate = Candidate.objects.create(
+            name="Interview Candidate",
+            recruitment_id=recruitment,
+            job_position_id=job_position,
+            stage_id=recruitment.stage_set.get(stage_type="applied"),
+            email="interview.candidate@example.com",
+            mobile="9999999911",
+            resume=SimpleUploadedFile(
+                "interview_resume.pdf",
+                b"%PDF-1.4 interview",
+                content_type="application/pdf",
+            ),
+        )
+
+        response = self.client.post(
+            "/api/recruitment/interviews/",
+            {
+                "candidate": candidate.id,
+                "interviewers": [self.employee.id],
+                "interview_date": "2026-05-01",
+                "interview_time": "10:30:00",
+                "description": "Technical discussion",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 200
+        mock_send.assert_called_once()
+        assert mock_send.call_args.kwargs["is_update"] is False
+
+    @patch(
+        "horilla_api.api_serializers.onboarding.serializers.OnboardingCandidateSerializer._send_candidate_interview_stage_mail"
+    )
+    def test_recruitment_candidate_put_status_interview_sends_stage_email(
+        self, mock_send
+    ):
+        self.client.force_authenticate(user=self.user)
+        department = Department.objects.create(department="Interview Status Department")
+        job_position = JobPosition.objects.create(
+            job_position="Support Engineer",
+            department_id=department,
+        )
+        recruitment = Recruitment.objects.create(
+            title="Interview Status Hiring",
+            description="Hiring flow",
+            is_event_based=True,
+            is_published=False,
+            vacancy=1,
+            company_id=self.company,
+        )
+        recruitment.open_positions.add(job_position)
+        applied_stage = recruitment.stage_set.get(stage_type="applied")
+        Stage.objects.create(
+            recruitment_id=recruitment,
+            stage="Interview",
+            stage_type="interview",
+            sequence=2,
+        )
+        candidate = Candidate.objects.create(
+            name="Status Interview Candidate",
+            recruitment_id=recruitment,
+            job_position_id=job_position,
+            stage_id=applied_stage,
+            email="status.interview@example.com",
+            mobile="9999999912",
+            resume=SimpleUploadedFile(
+                "status_interview_resume.pdf",
+                b"%PDF-1.4 status interview",
+                content_type="application/pdf",
+            ),
+        )
+
+        response = self.client.put(
+            f"/api/recruitment/candidates/{candidate.id}/",
+            {"status": "interview"},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        mock_send.assert_called_once()
+
+    @patch(
+        "horilla_api.api_serializers.onboarding.serializers.OnboardingCandidateSerializer._send_candidate_rejection_mail"
+    )
+    def test_recruitment_candidate_put_status_cancelled_sends_rejection_email(
+        self, mock_send
+    ):
+        self.client.force_authenticate(user=self.user)
+        department = Department.objects.create(department="Rejected Status Department")
+        job_position = JobPosition.objects.create(
+            job_position="Frontend Engineer",
+            department_id=department,
+        )
+        recruitment = Recruitment.objects.create(
+            title="Rejected Status Hiring",
+            description="Hiring flow",
+            is_event_based=True,
+            is_published=False,
+            vacancy=1,
+            company_id=self.company,
+        )
+        recruitment.open_positions.add(job_position)
+        applied_stage = recruitment.stage_set.get(stage_type="applied")
+        candidate = Candidate.objects.create(
+            name="Rejected Candidate",
+            recruitment_id=recruitment,
+            job_position_id=job_position,
+            stage_id=applied_stage,
+            email="rejected.candidate@example.com",
+            mobile="9999999913",
+            resume=SimpleUploadedFile(
+                "rejected_resume.pdf",
+                b"%PDF-1.4 rejected",
+                content_type="application/pdf",
+            ),
+        )
+
+        response = self.client.put(
+            f"/api/recruitment/candidates/{candidate.id}/",
+            {"status": "cancelled"},
+            format="json",
+        )
+
+        assert response.status_code == 200
+        mock_send.assert_called_once()
 
     def test_onboarding_candidates_list_filters_using_hired_status(self):
         self.client.force_authenticate(user=self.user)
@@ -318,6 +540,186 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         assert data[0]["id"] == offboarding.id
         assert data[0]["title"] == "Exit Process"
 
+    def test_exit_process_get_falls_back_to_created_by_admin_manager(self):
+        admin_user = User.objects.create_user(
+            username="createdbyadmin",
+            password="password",
+            is_staff=True,
+            email="createdbyadmin@example.com",
+        )
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Created",
+            employee_last_name="Admin",
+            email="created-by-admin@example.com",
+            phone="5555555555",
+            role="admin",
+        )
+        self.client.force_authenticate(user=self.user)
+        offboarding = Offboarding.objects.create(
+            title="Exit Process",
+            description="Standard exit workflow",
+            company_id=self.company,
+        )
+        offboarding.created_by = admin_user
+        offboarding.save(update_fields=["created_by"])
+
+        response = self.client.get("/api/offboarding/exit-process/")
+
+        assert response.status_code == 200
+        matching = next(
+            item for item in response.json() if item["id"] == offboarding.id
+        )
+        assert matching["managers"] == [
+            {"id": admin_employee.id, "name": admin_employee.get_full_name()}
+        ]
+
+    def test_exit_process_create_accepts_admin_user_id_in_managers(self):
+        admin_user = User.objects.create_user(
+            username="offboardingadmin",
+            password="password",
+            is_staff=True,
+        )
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Admin",
+            employee_last_name="Manager",
+            email="admin.manager@example.com",
+            phone="8888888888",
+            role="admin",
+        )
+        self.client.force_authenticate(user=admin_user)
+
+        response = self.client.post(
+            "/api/offboarding/exit-process/",
+            {
+                "title": "Exit Process",
+                "description": "Standard exit workflow",
+                "managers": [admin_user.id],
+                "status": "ongoing",
+                "company": self.company.id,
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["managers"] == [
+            {"id": admin_employee.id, "name": admin_employee.get_full_name()}
+        ]
+
+    def test_exit_process_create_resolves_admin_user_id_without_employee_profile(self):
+        admin_user = User.objects.create_user(
+            username="bareadmin",
+            password="password",
+            is_staff=True,
+            email="bareadmin@example.com",
+        )
+        self.client.force_authenticate(user=admin_user)
+
+        response = self.client.post(
+            "/api/offboarding/exit-process/",
+            {
+                "title": "Exit Process",
+                "description": "Standard exit workflow",
+                "managers": [admin_user.id],
+                "status": "ongoing",
+                "company": self.company.id,
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        created_employee = Employee.objects.get(employee_user_id=admin_user)
+        assert created_employee.role == "admin"
+        assert response.json()["managers"] == [
+            {"id": created_employee.id, "name": created_employee.get_full_name()}
+        ]
+
+    def test_exit_process_create_rejects_non_admin_manager(self):
+        admin_user = User.objects.create_user(
+            username="validatoradmin",
+            password="password",
+            is_staff=True,
+        )
+        Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Validator",
+            employee_last_name="Admin",
+            email="validator.admin@example.com",
+            phone="6666666666",
+            role="admin",
+        )
+        self.client.force_authenticate(user=admin_user)
+
+        response = self.client.post(
+            "/api/offboarding/exit-process/",
+            {
+                "title": "Exit Process",
+                "description": "Standard exit workflow",
+                "managers": [self.employee.id],
+                "status": "ongoing",
+                "company": self.company.id,
+            },
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert (
+            response.json()["managers"][0]
+            == f"Managers must reference admin users only. Invalid employee ids: [{self.employee.id}]"
+        )
+
+    def test_exit_process_create_ignores_legacy_manager_users_and_defaults_to_admin(self):
+        admin_user = User.objects.create_user(
+            username="defaultoffboardingadmin",
+            password="password",
+            is_staff=True,
+        )
+        admin_employee = Employee.objects.create(
+            employee_user_id=admin_user,
+            employee_first_name="Default",
+            employee_last_name="Admin",
+            email="default.admin@example.com",
+            phone="7777777777",
+            role="admin",
+        )
+        self.client.force_authenticate(user=admin_user)
+
+        response = self.client.post(
+            "/api/offboarding/exit-process/",
+            {
+                "title": "Exit Process",
+                "description": "Standard exit workflow",
+                "manager_users": [admin_user.id],
+                "status": "ongoing",
+                "company": self.company.id,
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        assert response.json()["managers"] == [
+            {"id": admin_employee.id, "name": admin_employee.get_full_name()}
+        ]
+
+    def test_exit_process_create_requires_admin_user(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            "/api/offboarding/exit-process/",
+            {
+                "title": "Exit Process",
+                "description": "Standard exit workflow",
+                "status": "ongoing",
+                "company": self.company.id,
+            },
+            format="json",
+        )
+
+        assert response.status_code == 403
+        assert response.json()["error"] == "Permission denied"
+
     def test_offboarding_stage_create_returns_connected_exit_process(self):
         self.client.force_authenticate(user=self.user)
         offboarding = Offboarding.objects.create(
@@ -342,6 +744,45 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         assert data["offboarding"]["id"] == offboarding.id
         assert data["offboarding"]["title"] == "Exit Process"
         assert data["title"] == "Exit Interview"
+
+    def test_offboarding_employee_create_accepts_user_id_in_employee_field(self):
+        self.client.force_authenticate(user=self.user)
+        offboarding = Offboarding.objects.create(
+            title="Exit Process",
+            description="Standard exit workflow",
+            company_id=self.company,
+        )
+        User.objects.create_user(username="padding1", password="password")
+        User.objects.create_user(username="padding2", password="password")
+        target_user = User.objects.create_user(
+            username="offboardtarget",
+            password="password",
+            email="offboardtarget@example.com",
+        )
+        target_employee = Employee.objects.create(
+            employee_user_id=target_user,
+            employee_first_name="Target",
+            employee_last_name="Employee",
+            email="target.employee@example.com",
+            phone="8888888800",
+        )
+
+        response = self.client.post(
+            "/api/offboarding/employees/",
+            {
+                "employee": target_user.id,
+                "offboarding": offboarding.id,
+                "notice_period_starts": "2026-04-22",
+                "notice_period_ends": "2026-05-22",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        assert response.json()["employee"] == {
+            "id": target_employee.id,
+            "name": target_employee.get_full_name(),
+        }
 
     def test_offboarding_stages_list_can_filter_by_exit_process(self):
         self.client.force_authenticate(user=self.user)
@@ -394,6 +835,41 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         assert data["planned_to_leave_on"] == "2026-04-15"
         assert data["status"] == "Requested"
         assert ResignationLetter.objects.filter(employee_id=self.employee).exists()
+
+    def test_resignation_request_create_accepts_user_id_in_employee_field(self):
+        self.client.force_authenticate(user=self.user)
+        User.objects.create_user(username="resignpad1", password="password")
+        User.objects.create_user(username="resignpad2", password="password")
+        target_user = User.objects.create_user(
+            username="resigntarget",
+            password="password",
+            email="resigntarget@example.com",
+        )
+        target_employee = Employee.objects.create(
+            employee_user_id=target_user,
+            employee_first_name="Resign",
+            employee_last_name="Target",
+            email="resign.target@example.com",
+            phone="7777777711",
+        )
+
+        response = self.client.post(
+            "/api/offboarding/resignation-requests/",
+            {
+                "employee": target_user.id,
+                "title": "Personal Resignation",
+                "description": "I want to resign for personal reasons.",
+                "planned_to_leave_on": "2026-04-15",
+                "status": "requested",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        assert response.json()["employee"] == {
+            "id": target_employee.id,
+            "name": target_employee.get_full_name(),
+        }
 
     def test_survey_template_create_falls_back_when_company_pk_is_invalid(self):
         self.client.force_authenticate(user=self.user)

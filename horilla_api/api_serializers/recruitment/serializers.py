@@ -1,3 +1,4 @@
+from django.contrib.auth.models import User
 from django.db import IntegrityError
 from rest_framework import serializers
 
@@ -14,6 +15,64 @@ from recruitment.models import (
     Stage,
     SurveyTemplate,
 )
+
+
+class UserOrEmployeeRelatedField(serializers.PrimaryKeyRelatedField):
+    default_error_messages = {
+        "does_not_exist": 'Invalid pk "{pk_value}" - object does not exist.',
+        "incorrect_type": "Incorrect type. Expected pk value, received {data_type}.",
+    }
+
+    def _ensure_employee_for_admin_user(self, user):
+        if not (user.is_superuser or user.is_staff):
+            self.fail("does_not_exist", pk_value=user.pk)
+        employee, _created = Employee.objects.get_or_create(
+            employee_user_id=user,
+            defaults={
+                "employee_first_name": user.first_name or user.username,
+                "employee_last_name": user.last_name or "",
+                "email": user.email or f"{user.username}-{user.id}@example.com",
+                "phone": "0000000000",
+                "role": "admin",
+            },
+        )
+        updates = {}
+        if not employee.email:
+            updates["email"] = user.email or f"{user.username}-{user.id}@example.com"
+        if not employee.phone:
+            updates["phone"] = "0000000000"
+        if (user.is_superuser or user.is_staff) and employee.role != "admin":
+            updates["role"] = "admin"
+        if updates:
+            Employee.objects.filter(pk=employee.pk).update(**updates)
+            for field, value in updates.items():
+                setattr(employee, field, value)
+        return employee
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            data = data.get("user_id") or data.get("employee_id") or data.get("id")
+        if isinstance(data, str):
+            data = data.strip()
+        if isinstance(data, bool) or not isinstance(data, (str, int)):
+            self.fail("incorrect_type", data_type=type(data).__name__)
+        if isinstance(data, str):
+            if not data.isdigit():
+                self.fail("does_not_exist", pk_value=data)
+            data = int(data)
+
+        user = User.objects.filter(pk=data).first()
+        if user:
+            linked_employee = Employee.objects.filter(employee_user_id=user).first()
+            if linked_employee:
+                return linked_employee
+            return self._ensure_employee_for_admin_user(user)
+
+        employee = Employee.objects.filter(pk=data).first()
+        if employee:
+            return employee
+
+        self.fail("does_not_exist", pk_value=data)
 
 
 class RecruitmentPipelineSerializer(serializers.ModelSerializer):
@@ -640,7 +699,7 @@ class RecruitmentStageSerializer(serializers.ModelSerializer):
     recruitment = serializers.PrimaryKeyRelatedField(
         source="recruitment_id", queryset=Recruitment.objects.all(), write_only=True
     )
-    stage_managers = serializers.PrimaryKeyRelatedField(
+    stage_managers = UserOrEmployeeRelatedField(
         queryset=Employee.objects.all(), many=True, write_only=True
     )
     recruitment_data = serializers.SerializerMethodField(read_only=True)
@@ -657,6 +716,7 @@ class RecruitmentStageSerializer(serializers.ModelSerializer):
             "stage",
             "stage_type",
         ]
+        validators = []
 
     def validate_stage_type(self, value):
         allowed = {choice[0] for choice in Stage.stage_types}
@@ -853,8 +913,8 @@ class RecruitmentInterviewSerializer(serializers.ModelSerializer):
             elif isinstance(interviewers, tuple):
                 data["interviewers"] = list(interviewers)
 
-        print("🔥 INITIAL DATA:", data)
         return super().to_internal_value(data)
+
 
     def create(self, validated_data):
         validated_data.pop("employee_id", None)  # ignore here
