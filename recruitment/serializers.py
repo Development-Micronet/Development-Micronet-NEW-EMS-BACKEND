@@ -51,3 +51,4 @@ class CandidateSerializer(serializers.ModelSerializer):
 
     def get_status(self, obj):
         return "applied"
+# hjkhkk
