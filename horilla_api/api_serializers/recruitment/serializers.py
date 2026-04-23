@@ -894,7 +894,7 @@ class RecruitmentStageSerializer(serializers.ModelSerializer):
 #         data["interviewers"] = data.pop("interviewers_data")
 #         return data
 
-class RecruitmentInterviewSerializer(serializers.ModelSerializer):
+class LegacyRecruitmentInterviewSerializer(serializers.ModelSerializer):
     candidate = serializers.PrimaryKeyRelatedField(
         source="candidate_id",
         queryset=Recruitment.objects.none(),
@@ -995,6 +995,98 @@ class RecruitmentInterviewSerializer(serializers.ModelSerializer):
 
 
         
+
+class RecruitmentInterviewSerializer(serializers.ModelSerializer):
+    candidate = serializers.PrimaryKeyRelatedField(
+        source="candidate_id",
+        queryset=Recruitment.objects.none(),
+        write_only=True,
+    )
+    interviewers = serializers.PrimaryKeyRelatedField(
+        source="employee_id",
+        queryset=Employee._base_manager.all(),
+        many=True,
+        write_only=True,
+    )
+    candidate_data = serializers.SerializerMethodField(read_only=True)
+    interviewers_data = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = InterviewSchedule
+        fields = [
+            "id",
+            "candidate",
+            "candidate_data",
+            "interviewers",
+            "interviewers_data",
+            "interview_date",
+            "interview_time",
+            "description",
+            "completed",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from recruitment.models import Candidate
+
+        self.fields["candidate"].queryset = Candidate.objects.all()
+
+    def to_internal_value(self, data):
+        if hasattr(data, "copy"):
+            mutable = data.copy()
+        else:
+            mutable = dict(data)
+
+        interviewers = mutable.get("interviewers")
+        if interviewers:
+            if isinstance(interviewers, str) and "," not in interviewers:
+                mutable["interviewers"] = [int(interviewers)]
+            elif isinstance(interviewers, str) and "," in interviewers:
+                mutable["interviewers"] = [
+                    int(interviewer_id.strip())
+                    for interviewer_id in interviewers.split(",")
+                ]
+            elif isinstance(interviewers, tuple):
+                mutable["interviewers"] = list(interviewers)
+
+        return super().to_internal_value(mutable)
+
+    def create(self, validated_data):
+        interviewers = validated_data.pop("employee_id", [])
+        instance = InterviewSchedule.objects.create(**validated_data)
+        if interviewers:
+            instance.employee_id.set(interviewers)
+        return instance
+
+    def update(self, instance, validated_data):
+        interviewers = validated_data.pop("employee_id", None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if interviewers is not None:
+            instance.employee_id.set(interviewers)
+        return instance
+
+    def get_candidate_data(self, obj):
+        candidate = obj.candidate_id
+        return {
+            "id": candidate.id,
+            "name": candidate.name,
+            "email": candidate.email,
+        }
+
+    def get_interviewers_data(self, obj):
+        through_objects = obj.employee_id.through.objects.filter(interviewschedule=obj)
+        return [
+            {"id": through.employee.id, "name": through.employee.get_full_name()}
+            for through in through_objects
+        ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["candidate"] = data.pop("candidate_data")
+        data["interviewers"] = data.pop("interviewers_data")
+        return data
 
 
 class RecruitmentSkillZoneSerializer(serializers.ModelSerializer):

@@ -11,9 +11,9 @@
 
       body {
         font-family: "Times New Roman", serif;
-        font-size: 13.5px;
-        color: #000000;
-        line-height: 1.45;
+        font-size: 13px;
+        color: #111827;
+        line-height: 1.5;
         margin: 0;
         padding: 0;
       }
@@ -25,14 +25,14 @@
       .header {
         width: 100%;
         border-collapse: collapse;
-        margin-bottom: 18px;
+        margin-bottom: 16px;
       }
 
-      .company {
-        font-size: 28px;
-        font-style: italic;
-        margin: 0 0 4px 0;
-        color: #5b4d86;
+      .brand {
+        font-size: 24px;
+        font-weight: bold;
+        color: #0f172a;
+        margin: 0;
       }
 
       .logo {
@@ -41,15 +41,15 @@
       }
 
       .line {
-        border-top: 1px solid #000000;
-        margin: 8px 0 30px 0;
+        border-top: 1px solid #cbd5e1;
+        margin: 10px 0 26px 0;
       }
 
       .subject {
         text-align: center;
         font-weight: bold;
         text-decoration: underline;
-        margin: 10px 0 22px 0;
+        margin: 14px 0 22px 0;
       }
 
       p {
@@ -57,7 +57,7 @@
       }
 
       ul {
-        margin: 5px 0 14px 24px;
+        margin: 8px 0 14px 24px;
         padding-left: 8px;
       }
 
@@ -70,40 +70,20 @@
       }
 
       .indent {
-        margin-left: 38px;
+        margin-left: 28px;
         text-align: justify;
       }
 
       .signature-block {
-    margin-top: 24px;
-    text-align: right;
-  }
+        margin-top: 26px;
+        text-align: right;
+      }
 
       .signature-text {
-        font-size: 26px;
+        font-size: 22px;
         font-style: italic;
-        color: #3b5aa3;
+        color: #1d4ed8;
         margin: 0 0 4px 0;
-     
-      } 
-
-      .stamp {
-        width: 88px;
-        height: auto;
-        margin-left: 18px;
-      }
-
-      .sign-row {
-        border-collapse: collapse;
-        margin-top: 6px;
-        
-      }
-
-      .footer {
-        margin-top: 52px;
-        text-align: center;
-        font-size: 12px;
-        
       }
     </style>
   </head>
@@ -111,79 +91,77 @@
     <div class="page">
       <table class="header">
         <tr>
-          <td width="56%"></td>
-          <td width="44%" align="center">
+          <td width="55%" valign="top">
+            <p class="brand">{{ company_name|default:"Ace Technologies" }}</p>
+          </td>
+          <td width="45%" align="right">
             {% if logo_data_uri %}
             <img src="{{ logo_data_uri }}" class="logo" alt="Company Logo" />
             {% endif %}
-            <!-- <p class="company">{% if instance.recruitment_id and instance.recruitment_id.company_id %}{{ instance.recruitment_id.company_id.company }}{% else %}Company{% endif %}</p>
-            <p>{% if instance.recruitment_id and instance.recruitment_id.company_id %}Email: {{ instance.recruitment_id.company_id.email|default:"" }}{% endif %}</p> -->
           </td>
         </tr>
       </table>
       <div class="line"></div>
 
       <div class="recipient">
-      <p><strong>To,</strong></p>
-      <p><strong>
-        <strong>{{ instance.name }}</strong><br />
-        {% if instance.city %}{{ instance.city }}<br />{% elif instance.address %}{{ instance.address }}<br />{% endif %}
-        Mobile: {{ instance.mobile|default:"-" }}<br />
-        E-mail: {{ instance.email }}
-      </strong></p>
+        <p><strong>Private & Confidential</strong></p>
+        <p><strong>To,</strong></p>
+        <p>
+          <strong>{{ instance.name }}</strong><br />
+          {% if instance.city %}{{ instance.city }}<br />{% elif instance.address %}{{ instance.address }}<br />{% endif %}
+          Mobile: {{ instance.mobile|default:"-" }}<br />
+          Email: {{ instance.email }}
+        </p>
       </div>
 
-      <p class="subject">Sub: Offer Letter</p>
+      <p class="subject">Subject: Offer of Employment</p>
 
       <p><strong>Dear {{ instance.name }},</strong></p>
 
       <p class="indent">
-        With reference to your application and subsequent interview with us, we are pleased
-        to offer you the position of
-        <strong>{% if instance.job_position_id %}{{ instance.job_position_id.job_position }}{% else %}-{% endif %}</strong>
-        in organization. We feel confident that you will contribute your skills and
-        experience to the growth of our organization.
+        We are pleased to offer you the position of
+        <strong>{% if instance.job_position_id %}{{ instance.job_position_id.job_position }}{% else %}the offered role{% endif %}</strong>
+        with <strong>{{ company_name|default:"Ace Technologies" }}</strong>.
       </p>
 
       <p class="indent">
-        We are pleased to appoint you for full-time employment.
-        {% if instance.joining_date %}
-        As per the discussion, your joining date will be on <strong>{{ instance.joining_date }}</strong>
-        {% if instance.recruitment_id and instance.recruitment_id.company_id %}at {{ instance.recruitment_id.company_id.company }}{% endif %}.
-        {% else %}
-        Your joining date will be communicated separately.
-        {% endif %}
+        This offer reflects our confidence in your professional capabilities and the contribution we believe you can make to our team. We are excited about the possibility of welcoming you to our organization.
       </p>
 
-      <p class="indent">Your remuneration will be as per the finalized discussion.</p>
+      <p class="indent">
+        {% if instance.joining_date %}
+        Your proposed joining date will be <strong>{{ instance.joining_date }}</strong>.
+        {% else %}
+        Your proposed joining date will be communicated separately by our Talent Acquisition team.
+        {% endif %}
+        Details regarding compensation, benefits, and other employment terms will be shared as part of the final onboarding process.
+      </p>
 
-      <p class="indent">Your joining confirmation and verification of the following documents which is to be submitted at the time of your reporting for duty.</p>
+      <p class="indent">
+        At the time of joining, we request you to carry the following documents for verification:
+      </p>
       <ul>
-        <li>Photocopies of all educational testimonials.</li>
-        <li>Address proof of permanent and present address.</li>
-        <li>Photo IDs - Aadhar Card</li>
+        <li>Copies of educational certificates and testimonials.</li>
+        <li>Proof of permanent and current address.</li>
+        <li>Government-issued photo identification.</li>
         <li>PAN card copy.</li>
       </ul>
 
       <p class="indent">
-        Your offer of appointment stands withdrawn if any of the information furnished above
-        is found to be incorrect.
+        This offer is subject to the accuracy of the information and supporting documents submitted during the recruitment process.
       </p>
 
-      <p>Wishing you all the best,</p>
-      <p>For {% if instance.recruitment_id and instance.recruitment_id.company_id %}{{ instance.recruitment_id.company_id.company }}{% else %}HR Team{% endif %}</p>
+      <p class="indent">
+        We look forward to welcoming you to <strong>{{ company_name|default:"Ace Technologies" }}</strong> and wish you continued success in your professional journey.
+      </p>
+
+      <p>Warm regards,</p>
+      <p>For {{ company_name|default:"Ace Technologies" }}</p>
 
       <div class="signature-block">
-    <p class="signature-text">{{ signature_text }}</p>
-</div>
-
-<div style="text-align:right;">
-{% if instance.joining_date %}({{ instance.joining_date }}){% endif %}<br>
-<strong>Authorized Signatory</strong>
-</div>
-
-      
-      
+        <p class="signature-text">{{ signature_text }}</p>
+        <p><strong>Authorized Signatory</strong></p>
+      </div>
     </div>
   </body>
 </html>

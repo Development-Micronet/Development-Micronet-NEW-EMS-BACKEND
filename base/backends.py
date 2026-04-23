@@ -42,6 +42,7 @@ class DefaultHorillaMailBackend(EmailBackend):
         **kwargs,
     ):
         self.configuration = self.get_dynamic_email_config()
+        self._explicit_fail_silently = fail_silently
         ssl_keyfile = (
             getattr(self.configuration, "ssl_keyfile", None)
             if self.configuration
@@ -177,6 +178,8 @@ class DefaultHorillaMailBackend(EmailBackend):
 
     @property
     def dynamic_fail_silently(self):
+        if self._explicit_fail_silently is not None:
+            return self._explicit_fail_silently
         return (
             self.configuration.fail_silently
             if self.configuration

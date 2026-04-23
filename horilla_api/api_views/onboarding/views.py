@@ -22,13 +22,18 @@ class OnboardingCandidateAPIView(APIView):
             ).annotate(status=F("stage_id__stage_type"))
             .filter(
                 hired=True,
-                recruitment_id__closed=False,
+                # recruitment_id__closed=False,
             )
             .order_by("id")
+            # Candidate.objects.filter(
+            #     hired=True
+            # )
+            # .order_by("id")
         )
 
     def get(self, request, pk=None):
         queryset = self._get_queryset()
+        data = Candidate.objects.all()
         if pk:
             try:
                 candidate = queryset.get(pk=pk)

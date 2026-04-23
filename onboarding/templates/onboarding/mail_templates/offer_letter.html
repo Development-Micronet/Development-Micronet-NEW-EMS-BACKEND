@@ -1,68 +1,37 @@
 <!DOCTYPE html>
-
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Offer Letter</title>
 </head>
-
-<body style="margin:0; padding:0; background:#f3f4f6; font-family:Arial, Helvetica, sans-serif;">
-
+<body style="margin:0; padding:0; background:#eef2f7; font-family:Arial, Helvetica, sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" style="padding:40px 0;">
 <tr>
 <td align="center">
-
-<table width="620" cellpadding="0" cellspacing="0" style="background:#ffffff; border-radius:8px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.08);">
-
-<!-- Header -->
-
+<table width="620" cellpadding="0" cellspacing="0" style="background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 6px 20px rgba(15,23,42,0.08);">
 <tr>
-<td style="background:#1f2937; padding:20px 30px; color:#ffffff;">
-
+<td style="background:linear-gradient(135deg,#0f172a,#1d4ed8); padding:22px 32px; color:#ffffff;">
 <table width="100%">
 <tr>
-
-<td align="left" style="font-size:20px; font-weight:bold;">
-{% if instance.recruitment_id and instance.recruitment_id.company_id %}
-{{ instance.recruitment_id.company_id.company }}
-{% else %}
-Ace Technologies 
-{% endif %}
+<td align="left" style="font-size:22px; font-weight:bold;">
+{{ company_name|default:"Ace Technologies" }}
 </td>
-
-<!-- <td align="right">
-<img src="{{ company_logo }}" alt="Company Logo" height="36" style="display:block;">
-</td> -->
-
 </tr>
 </table>
-
 </td>
 </tr>
-
-<!-- Body -->
-
 <tr>
-<td style="padding:35px 40px; color:#374151; font-size:15px; line-height:1.7;">
-
+<td style="padding:36px 40px; color:#374151; font-size:15px; line-height:1.7;">
 <p style="margin:0 0 18px 0;">
 Dear <strong>{{ instance.name }}</strong>,
 </p>
-
 <p style="margin:0 0 18px 0;">
-Greetings from 
-<strong>
-{% if instance.recruitment_id and instance.recruitment_id.company_id %}
-{{ instance.recruitment_id.company_id.company }}
-{% else %}
-Ace Technologies
-{% endif %}
-</strong>.
+We are delighted to share this formal offer of employment from
+<strong>{{ company_name|default:"Ace Technologies" }}</strong>.
 </p>
-
 <p style="margin:0 0 18px 0;">
-We are pleased to inform you that you have been selected for the position of 
+Following a careful review of your profile and discussions with our team, we are pleased to offer you the position of
 <strong>
 {% if instance.job_position_id %}
 {{ instance.job_position_id.job_position }}
@@ -71,19 +40,13 @@ the offered role
 {% endif %}
 </strong>.
 </p>
-
 <p style="margin:0 0 18px 0;">
-Please find your <strong>Offer Letter</strong> attached with this email in PDF format. The document contains detailed information regarding your employment terms and conditions.
+Please find your <strong>Offer Letter</strong> attached to this email in PDF format. It contains the formal terms of employment and key information to help you review the opportunity in detail.
 </p>
-
-<!-- Offer Details Box -->
-
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:20px; margin:20px 0;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fbff; border:1px solid #dbe4f0; border-radius:10px; padding:20px; margin:20px 0;">
 <tr>
 <td style="font-size:14px; color:#374151;">
-
 <p style="margin:0 0 8px 0;"><strong>Candidate Name:</strong> {{ instance.name }}</p>
-
 <p style="margin:0 0 8px 0;">
 <strong>Position:</strong>
 {% if instance.job_position_id %}
@@ -92,68 +55,40 @@ Please find your <strong>Offer Letter</strong> attached with this email in PDF f
 Offered Role
 {% endif %}
 </p>
-
 <p style="margin:0 0 8px 0;">
-<strong>Company:</strong>
-{% if instance.recruitment_id and instance.recruitment_id.company_id %}
-{{ instance.recruitment_id.company_id.company }}
-{% else %}
-Ace Technologies
-{% endif %}
+<strong>Company:</strong> {{ company_name|default:"Ace Technologies" }}
 </p>
-
+<p style="margin:0;">
+<strong>Joining Date:</strong> {{ instance.joining_date|default:"To be discussed" }}
+</p>
 </td>
 </tr>
 </table>
-
 <p style="margin:0 0 18px 0;">
-Kindly review the attached document carefully. If you have any questions or require further clarification, please feel free to contact our HR team.
+Kindly review the attached document carefully. If you have any questions or would like any clarification regarding the offer, our Talent Acquisition team will be happy to assist you.
 </p>
-
 <p style="margin:0 0 22px 0;">
-We look forward to welcoming you to our organization and hope you will have a successful and rewarding career with us.
+We look forward to welcoming you to <strong>{{ company_name|default:"Ace Technologies" }}</strong> and hope you will have a meaningful and successful journey with us.
 </p>
-
 <p style="margin:0 0 6px 0;">Warm regards,</p>
-
 <p style="margin:0; font-weight:bold;">
-{% if instance.recruitment_id and instance.recruitment_id.company_id %}
-{{ instance.recruitment_id.company_id.company }} HR Team
-{% else %}
-HR Team
-{% endif %}
+{{ company_name|default:"Ace Technologies" }} Talent Acquisition Team
 </p>
-
 </td>
 </tr>
-
-<!-- Footer -->
-
 <tr>
 <td style="background:#f9fafb; padding:22px 40px; border-top:1px solid #e5e7eb;">
-
 <p style="margin:0 0 8px 0; font-size:12px; color:#6b7280;">
-This is an automated email from the HR Department. Please do not reply directly to this email.
+This is an automated email from the Talent Acquisition team. Please do not reply directly to this message.
 </p>
-
 <p style="margin:0; font-size:12px; color:#9ca3af;">
-© {% now "Y" %} 
-{% if instance.recruitment_id and instance.recruitment_id.company_id %}
-{{ instance.recruitment_id.company_id.company }}
-{% else %}
-Company
-{% endif %}
-. All rights reserved.
+© {% now "Y" %} {{ company_name|default:"Ace Technologies" }}. All rights reserved.
 </p>
-
-</td>
-</tr>
-
-</table>
-
 </td>
 </tr>
 </table>
-
+</td>
+</tr>
+</table>
 </body>
 </html>

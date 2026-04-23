@@ -343,6 +343,117 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
             {"id": inactive_employee.id, "name": inactive_employee.get_full_name()}
         ]
 
+    def test_recruitment_candidate_post_accepts_inactive_employee_user_id_in_referral(self):
+        self.client.force_authenticate(user=self.user)
+        department = Department.objects.create(department="Referral Department")
+        job_position = JobPosition.objects.create(
+            job_position="Referral Engineer",
+            department_id=department,
+        )
+        recruitment = Recruitment.objects.create(
+            title="Referral Hiring",
+            description="Hiring flow",
+            is_event_based=True,
+            is_published=False,
+            vacancy=1,
+            company_id=self.company,
+        )
+        recruitment.open_positions.add(job_position)
+        referral_user = User.objects.create_user(
+            username="inactive_referral_user",
+            password="password",
+            email="inactive.referral@example.com",
+        )
+        referral_employee = Employee.objects.create(
+            employee_user_id=referral_user,
+            employee_first_name="Inactive",
+            employee_last_name="Referral",
+            email="inactive.referral.employee@example.com",
+            phone="9999999913",
+            is_active=False,
+        )
+
+        response = self.client.post(
+            "/api/recruitment/candidates/",
+            {
+                "name": "Referral Candidate",
+                "recruitment": recruitment.id,
+                "job_position": job_position.id,
+                "email": "referral.candidate@example.com",
+                "mobile": "9999999914",
+                "referral": referral_user.id,
+                "resume": SimpleUploadedFile(
+                    "referral_resume.pdf",
+                    b"%PDF-1.4 referral",
+                    content_type="application/pdf",
+                ),
+            },
+            format="multipart",
+        )
+
+        assert response.status_code == 201
+        candidate = Candidate.objects.get(email="referral.candidate@example.com")
+        assert candidate.referral_id == referral_employee.id
+        assert response.json()["data"]["referral_data"] == {
+            "id": referral_employee.id,
+            "badge_id": referral_employee.badge_id,
+            "name": referral_employee.get_full_name(),
+            "email": referral_employee.email,
+        }
+
+    def test_recruitment_candidate_post_accepts_admin_user_id_in_referral(self):
+        self.client.force_authenticate(user=self.user)
+        department = Department.objects.create(department="Admin Referral Department")
+        job_position = JobPosition.objects.create(
+            job_position="Admin Referral Engineer",
+            department_id=department,
+        )
+        recruitment = Recruitment.objects.create(
+            title="Admin Referral Hiring",
+            description="Hiring flow",
+            is_event_based=True,
+            is_published=False,
+            vacancy=1,
+            company_id=self.company,
+        )
+        recruitment.open_positions.add(job_position)
+        admin_user = User.objects.create_user(
+            username="candidate_referral_admin",
+            password="password",
+            email="candidate.referral.admin@example.com",
+            is_staff=True,
+        )
+
+        response = self.client.post(
+            "/api/recruitment/candidates/",
+            {
+                "name": "Admin Referral Candidate",
+                "recruitment": recruitment.id,
+                "job_position": job_position.id,
+                "email": "admin.referral.candidate@example.com",
+                "mobile": "9999999915",
+                "referral": admin_user.id,
+                "resume": SimpleUploadedFile(
+                    "admin_referral_resume.pdf",
+                    b"%PDF-1.4 admin referral",
+                    content_type="application/pdf",
+                ),
+            },
+            format="multipart",
+        )
+
+        assert response.status_code == 201
+        referral_employee = Employee.objects.get(employee_user_id=admin_user)
+        candidate = Candidate.objects.get(email="admin.referral.candidate@example.com")
+        assert referral_employee.role == "admin"
+        assert candidate.referral_id == referral_employee.id
+        assert response.json()["data"]["referral_data"] == {
+            "id": referral_employee.id,
+            "badge_id": referral_employee.badge_id,
+            "name": referral_employee.get_full_name(),
+            "email": referral_employee.email,
+        }
+
     def test_recruitment_candidate_put_updates_stage_from_status(self):
         self.client.force_authenticate(user=self.user)
         department = Department.objects.create(department="Engineering")

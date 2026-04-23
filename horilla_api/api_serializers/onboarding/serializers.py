@@ -4,6 +4,7 @@ import os
 from email.utils import formataddr
 from urllib.parse import urlparse
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.db import transaction
 from django.template.loader import render_to_string
@@ -28,42 +29,51 @@ OFFER_LETTER_TEMPLATE_TITLE = "Offer Letter"
 ACE_RECRUITMENT_FROM_NAME = "Ace Technologies Recruitment Team"
 OFFER_LETTER_TEMPLATE_BODY = """
 <div style="font-family: 'Times New Roman', serif; color: #111827; line-height: 1.65;">
-  <p>To,</p>
+  <p><strong>Private & Confidential</strong></p>
+  <p>Date: {{ instance.joining_date|default:"To be communicated" }}</p>
   <p>
     <strong>{{ instance.name }}</strong><br>
     Mobile: {{ instance.mobile|default:"-" }}<br>
-    E-mail: {{ instance.email }}
+    Email: {{ instance.email }}
   </p>
-  <p style="text-align:center;"><strong><u>Sub: Offer Letter</u></strong></p>
+  <p style="text-align:center;"><strong><u>Subject: Offer of Employment</u></strong></p>
   <p>Dear {{ instance.name }},</p>
   <p>
-    With reference to your application and subsequent interview with us, we are pleased
-    to offer you the position of <strong>{{ instance.job_position_id.job_position }}</strong>
-    in our organization. We feel confident that you will contribute your skills and
-    experience to the growth of our organization.
+    We are pleased to offer you the position of
+    <strong>{{ instance.job_position_id.job_position|default:"the offered role" }}</strong>
+    with <strong>{{ company_name|default:"Ace Technologies" }}</strong>.
   </p>
   <p>
-    We are pleased to appoint you for full-time employment.
-    {% if instance.joining_date %}
-    As per the discussion, your joining date will be on <strong>{{ instance.joining_date }}</strong>.
-    {% else %}
-    Your joining date will be communicated separately.
-    {% endif %}
+    This offer reflects our confidence in your experience, capabilities, and the value you can
+    bring to our team. We believe you will make a meaningful contribution to the continued growth
+    of our organization.
   </p>
-  <p>Your remuneration and other terms will be shared as per the finalized discussion.</p>
-  <p>Please submit the following documents at the time of reporting for duty:</p>
+  <p>
+    {% if instance.joining_date %}
+    Your proposed joining date will be <strong>{{ instance.joining_date }}</strong>.
+    {% else %}
+    Your proposed joining date will be communicated separately by our HR team.
+    {% endif %}
+    Additional details regarding compensation, benefits, and employment terms will be shared with
+    you as part of the onboarding process.
+  </p>
+  <p>Please submit the following documents at the time of joining for verification:</p>
   <ul>
-    <li>Photocopies of all educational testimonials.</li>
-    <li>Address proof of permanent and present address.</li>
-    <li>Photo ID proof.</li>
+    <li>Copies of educational certificates and testimonials.</li>
+    <li>Proof of permanent and current address.</li>
+    <li>Government-issued photo identification.</li>
     <li>PAN card copy.</li>
   </ul>
   <p>
-    Your offer of appointment may be withdrawn if any of the information furnished above
-    is found to be incorrect.
+    This offer is subject to the accuracy of the information and documents submitted during the
+    selection and onboarding process.
   </p>
-  <p>Wishing you all the best,</p>
-  <p>For {{ instance.recruitment_id.company_id.company|default:"HR Team" }}</p>
+  <p>
+    We look forward to welcoming you to <strong>{{ company_name|default:"Ace Technologies" }}</strong>
+    and wish you every success in your new role.
+  </p>
+  <p>Warm regards,</p>
+  <p>For {{ company_name|default:"Ace Technologies" }}</p>
   <p>Authorized Signatory</p>
 </div>
 """.strip()
@@ -125,6 +135,77 @@ class JobPositionFlexibleField(serializers.RelatedField):
 
 
 class EmployeeFlexibleField(serializers.PrimaryKeyRelatedField):
+    def _employee_queryset(self):
+        return Employee._base_manager.all()
+
+    def _ensure_employee_for_admin_user(self, user):
+        if not (user.is_superuser or user.is_staff):
+            self.fail("does_not_exist", pk_value=user.pk)
+
+        employee, _created = Employee._base_manager.get_or_create(
+            employee_user_id=user,
+            defaults={
+                "employee_first_name": user.first_name or user.username,
+                "employee_last_name": user.last_name or "",
+                "email": user.email or f"{user.username}-{user.id}@example.com",
+                "phone": "0000000000",
+                "role": "admin",
+            },
+        )
+
+        updates = {}
+        if not employee.email:
+            updates["email"] = user.email or f"{user.username}-{user.id}@example.com"
+        if not employee.phone:
+            updates["phone"] = "0000000000"
+        if employee.role != "admin":
+            updates["role"] = "admin"
+
+        if updates:
+            Employee._base_manager.filter(pk=employee.pk).update(**updates)
+            for field, value in updates.items():
+                setattr(employee, field, value)
+
+        return employee
+
+    def _resolve_user_or_employee(self, candidate):
+        if candidate in (None, ""):
+            return None
+
+        candidate_str = str(candidate).strip()
+
+        if candidate_str.isdigit():
+            candidate_id = int(candidate_str)
+            user = User.objects.filter(pk=candidate_id).first()
+            if user:
+                employee = self._employee_queryset().filter(employee_user_id=user).first()
+                if employee:
+                    return employee
+                if user.is_superuser or user.is_staff:
+                    return self._ensure_employee_for_admin_user(user)
+
+            employee = self._employee_queryset().filter(pk=candidate_id).first()
+            if employee:
+                return employee
+
+        employee = self._employee_queryset().filter(email__iexact=candidate_str).first()
+        if employee:
+            return employee
+
+        user = User.objects.filter(email__iexact=candidate_str).first()
+        if user:
+            employee = self._employee_queryset().filter(employee_user_id=user).first()
+            if employee:
+                return employee
+            if user.is_superuser or user.is_staff:
+                return self._ensure_employee_for_admin_user(user)
+
+        employee = self._employee_queryset().filter(badge_id__iexact=candidate_str).first()
+        if employee:
+            return employee
+
+        return None
+
     def to_internal_value(self, data):
         if data in (None, ""):
             if self.allow_null:
@@ -143,28 +224,16 @@ class EmployeeFlexibleField(serializers.PrimaryKeyRelatedField):
             )
             email = data.get("email")
             if email:
-                employee = Employee.objects.filter(email__iexact=email).first()
+                employee = self._resolve_user_or_employee(email)
                 if employee:
                     return employee
         else:
             candidate_values.append(data)
 
         for candidate in candidate_values:
-            if candidate in (None, ""):
-                continue
-
-            candidate_str = str(candidate).strip()
-            if candidate_str.isdigit():
-                employee = Employee.objects.filter(
-                    employee_user_id__id=int(candidate_str)
-                ).first()
-                if employee:
-                    return employee
-
-            if isinstance(candidate, str):
-                employee = Employee.objects.filter(email__iexact=candidate_str).first()
-                if employee:
-                    return employee
+            employee = self._resolve_user_or_employee(candidate)
+            if employee:
+                return employee
 
         self.fail("does_not_exist", pk_value=data)
 
@@ -181,7 +250,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
         source="job_position_id", queryset=JobPosition.objects.all()
     )
     referral = EmployeeFlexibleField(
-        queryset=Employee.objects.all(),
+        queryset=Employee._base_manager.all(),
         required=False,
         allow_null=True,
     )
@@ -441,6 +510,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        status_email_requested = self._status_email_requested(validated_data)
         with transaction.atomic():
             candidate = super().create(validated_data)
             self._handle_offer_letter_status(
@@ -448,12 +518,17 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
                 previous_status=None,
                 status_provided="offer_letter_status" in validated_data,
             )
+            self._handle_pending_status_email(
+                candidate=candidate,
+                previous_stage_type=None,
+                status_provided=status_email_requested,
+            )
             return candidate
 
     def update(self, instance, validated_data):
         previous_status = instance.offer_letter_status
         previous_stage_type = getattr(getattr(instance, "stage_id", None), "stage_type", None)
-        status_provided = getattr(self, "_pending_status", serializers.empty)
+        status_email_requested = self._status_email_requested(validated_data)
         with transaction.atomic():
             candidate = super().update(instance, validated_data)
             self._handle_offer_letter_status(
@@ -464,9 +539,13 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             self._handle_pending_status_email(
                 candidate=candidate,
                 previous_stage_type=previous_stage_type,
-                status_provided=status_provided is not serializers.empty,
+                status_provided=status_email_requested,
             )
             return candidate
+
+    def _status_email_requested(self, validated_data):
+        pending_status = getattr(self, "_pending_status", serializers.empty)
+        return pending_status is not serializers.empty or "stage_id" in validated_data
 
     def _handle_pending_status_email(
         self, candidate, previous_stage_type=None, status_provided=False
@@ -484,6 +563,9 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             self._send_candidate_interview_stage_mail(candidate)
 
     def _get_company_name(self, candidate):
+        brand_name = getattr(settings, "EMAIL_BRAND_NAME", "").strip()
+        if brand_name:
+            return brand_name
         company = getattr(getattr(candidate, "recruitment_id", None), "company_id", None)
         return getattr(company, "company", None) or "Ace Technologies"
 
@@ -496,19 +578,79 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             return formataddr((ACE_RECRUITMENT_FROM_NAME, sender_email))
         return ACE_RECRUITMENT_FROM_NAME
 
+    def _get_mail_sender(self):
+        from_email = getattr(settings, "BREVO_FROM_EMAIL", "").strip()
+        from_name = getattr(settings, "BREVO_FROM_NAME", "").strip() or ACE_RECRUITMENT_FROM_NAME
+        api_key = getattr(settings, "BREVO_API_KEY", "").strip()
+
+        if not api_key:
+            brevo_config = BrevoEmailConfiguration.objects.filter(is_active=True).first()
+            if brevo_config:
+                api_key = brevo_config.api_key
+                from_email = brevo_config.from_email
+                from_name = brevo_config.from_name or ACE_RECRUITMENT_FROM_NAME
+
+        if not from_email:
+            email_backend = ConfiguredEmailBackend()
+            from_email = (
+                getattr(email_backend, "dynamic_mail_sent_from", None)
+                or getattr(email_backend, "dynamic_username", None)
+                or "noreply@acetechnologies.com"
+            )
+
+        return {
+            "api_key": api_key,
+            "from_email": from_email,
+            "from_name": from_name or ACE_RECRUITMENT_FROM_NAME,
+        }
+
+    def _send_candidate_email(self, candidate, subject, html_content, text_content):
+        recipient_email = getattr(candidate, "email", None)
+        if not recipient_email:
+            return
+
+        sender = self._get_mail_sender()
+        recipient_name = getattr(candidate, "name", None) or "Candidate"
+
+        if BREVO_AVAILABLE and sender["api_key"]:
+            brevo_sender = BrevoEmailSender(
+                api_key=sender["api_key"],
+                from_email=sender["from_email"],
+                from_name=sender["from_name"],
+            )
+            success, _message, _message_id = brevo_sender.send_email(
+                to_email=recipient_email,
+                to_name=recipient_name,
+                subject=subject,
+                html_content=html_content,
+                text_content=text_content,
+            )
+            if success:
+                return
+
+        email = EmailMessage(
+            subject=subject,
+            body=html_content,
+            from_email=formataddr((sender["from_name"], sender["from_email"])),
+            to=[recipient_email],
+            connection=ConfiguredEmailBackend(fail_silently=False),
+        )
+        email.content_subtype = "html"
+        email.send(fail_silently=False)
+
     def _send_candidate_rejection_mail(self, candidate):
         if not getattr(candidate, "email", None):
             return
 
         company_name = self._get_company_name(candidate)
         job_position = getattr(getattr(candidate, "job_position_id", None), "job_position", "the role")
-        subject = f"{company_name} | Application Update"
+        subject = f"{company_name} | Application Status Update"
         body = f"""
         <div style="background:#f6f8fb;padding:32px 16px;font-family:Arial,sans-serif;color:#101828;">
             <div style="max-width:700px;margin:0 auto;background:#ffffff;border:1px solid #d7deea;border-radius:18px;overflow:hidden;">
                 <div style="background:linear-gradient(135deg,#1f2937,#334155);padding:24px 32px;">
                     <p style="margin:0;color:#e2e8f0;font-size:13px;letter-spacing:.08em;text-transform:uppercase;">{company_name}</p>
-                    <h1 style="margin:10px 0 0;color:#ffffff;font-size:28px;line-height:1.25;">Application Update</h1>
+                    <h1 style="margin:10px 0 0;color:#ffffff;font-size:28px;line-height:1.25;">Thank you for your interest in {company_name}</h1>
                 </div>
                 <div style="padding:32px;">
                     <p style="margin:0 0 16px;color:#344054;line-height:1.7;">Dear {candidate.name},</p>
@@ -516,12 +658,16 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
                         Thank you for your interest in the <strong>{job_position}</strong> opportunity at <strong>{company_name}</strong>.
                     </p>
                     <p style="margin:0 0 16px;color:#344054;line-height:1.7;">
-                        After careful consideration, we regret to inform you that we will not be moving forward with your application at this time.
+                        After careful consideration, we regret to inform you that unfortunately we will not be moving forward with your application for this role.
                     </p>
                     <p style="margin:0 0 16px;color:#344054;line-height:1.7;">
-                        We appreciate the time and effort you invested in the process and encourage you to apply again for future opportunities that match your profile.
+                        This decision was not easy, and we sincerely appreciate the time, effort, and interest you invested in the selection process.
+                    </p>
+                    <p style="margin:0 0 16px;color:#344054;line-height:1.7;">
+                        We will be glad to stay in touch and encourage you to apply again for future opportunities at <strong>{company_name}</strong> that match your profile and experience.
                     </p>
                     <p style="margin:0;color:#344054;line-height:1.7;">
+                        Wishing you success in your career journey.<br><br>
                         Kind regards,<br>
                         Talent Acquisition Team<br>
                         {company_name}
@@ -530,15 +676,16 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             </div>
         </div>
         """
-        email = EmailMessage(
-            subject=subject,
-            body=body,
-            from_email=self._get_recruitment_from_email(),
-            to=[candidate.email],
-            connection=ConfiguredEmailBackend(),
+        text_content = (
+            f"Dear {candidate.name},\n\n"
+            f"Thank you for your interest in the {job_position} opportunity at {company_name}.\n"
+            "After careful consideration, unfortunately we will not be moving forward with your application for this role.\n"
+            "We sincerely appreciate the time, effort, and interest you invested in the selection process.\n"
+            f"We encourage you to apply again for future opportunities at {company_name} that match your profile and experience.\n\n"
+            "Wishing you success in your career journey.\n\n"
+            f"Kind regards,\nTalent Acquisition Team\n{company_name}"
         )
-        email.content_subtype = "html"
-        email.send(fail_silently=False)
+        self._send_candidate_email(candidate, subject, body, text_content)
 
     def _send_candidate_interview_stage_mail(self, candidate):
         if not getattr(candidate, "email", None):
@@ -571,15 +718,13 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             </div>
         </div>
         """
-        email = EmailMessage(
-            subject=subject,
-            body=body,
-            from_email=self._get_recruitment_from_email(),
-            to=[candidate.email],
-            connection=ConfiguredEmailBackend(),
+        text_content = (
+            f"Dear {candidate.name},\n\n"
+            f"We are pleased to inform you that your application for the {job_position} position at {company_name} has progressed to the interview stage.\n"
+            "Our recruitment team will share the interview schedule and next steps with you shortly.\n\n"
+            f"Best regards,\nTalent Acquisition Team\n{company_name}"
         )
-        email.content_subtype = "html"
-        email.send(fail_silently=False)
+        self._send_candidate_email(candidate, subject, body, text_content)
 
     def _handle_offer_letter_status(
         self, candidate, previous_status=None, status_provided=False
@@ -595,20 +740,27 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
         self._send_offer_letter_mail(candidate)
 
     def _ensure_offer_letter_template(self, candidate):
-        HorillaMailTemplate.objects.get_or_create(
+        company = getattr(getattr(candidate, "recruitment_id", None), "company_id", None)
+        template, _created = HorillaMailTemplate.objects.get_or_create(
             title=OFFER_LETTER_TEMPLATE_TITLE,
-            defaults={
-                "body": OFFER_LETTER_TEMPLATE_BODY,
-                "company_id": getattr(
-                    getattr(candidate, "recruitment_id", None), "company_id", None
-                ),
-            },
+            defaults={"body": OFFER_LETTER_TEMPLATE_BODY, "company_id": company},
         )
+        updates = {}
+        if template.body != OFFER_LETTER_TEMPLATE_BODY:
+            updates["body"] = OFFER_LETTER_TEMPLATE_BODY
+        if getattr(template, "company_id", None) != company:
+            updates["company_id"] = company
+
+        if updates:
+            for field, value in updates.items():
+                setattr(template, field, value)
+            template.save(update_fields=list(updates.keys()))
 
     def _send_offer_letter_mail(self, candidate):
         request = self.context.get("request")
         protocol = getattr(request, "scheme", "http") if request else "http"
         host = request.get_host() if request else "127.0.0.1:8000"
+        company_name = self._get_company_name(candidate)
         logo_data_uri = self._get_company_logo_data_uri(candidate)
         logo_path = self._get_company_logo_path(candidate)
         job_position = getattr(
@@ -624,6 +776,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
                     "instance": candidate,
                     "host": host,
                     "protocol": protocol,
+                    "company_name": company_name,
                     "logo_data_uri": logo_data_uri,
                     "logo_cid": "company_logo_inline",
                 },
@@ -632,30 +785,32 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
         except Exception:
             html_message = f"""
             <div style="font-family: Arial, Helvetica, sans-serif; color: #1f2937; line-height: 1.6;">
-              <h2>Offer Letter</h2>
+              <h2>{company_name} Offer Letter</h2>
               <p>Dear {candidate.name},</p>
-              <p>We are pleased to offer you the position of <strong>{job_position}</strong>.</p>
+              <p>We are pleased to offer you the position of <strong>{job_position}</strong> with <strong>{company_name}</strong>.</p>
               <p><strong>Recruitment:</strong> {recruitment}</p>
               <p><strong>Joining Date:</strong> {joining_date}</p>
-              <p><strong>Status:</strong> Sent</p>
-              <p>Best regards,<br>HR Team</p>
+              <p>Please review the attached offer letter for the complete terms and next steps.</p>
+              <p>Warm regards,<br>{company_name} Talent Acquisition Team</p>
             </div>
             """.strip()
 
-        subject = f"Offer Letter - {candidate.name}"
+        subject = f"{company_name} | Offer Letter - {candidate.name}"
         pdf_filename = f"offer_letter_{candidate.id}.pdf"
         text_content = (
             f"Dear {candidate.name},\n\n"
-            f"We are pleased to offer you the position of {job_position}.\n"
+            f"We are pleased to offer you the position of {job_position} with {company_name}.\n"
             f"Recruitment: {recruitment}\n"
             f"Joining Date: {joining_date}\n\n"
-            "Please review the offer letter and contact HR for any clarification.\n\n"
-            "Best regards,\nHR Team"
+            "Please review the attached offer letter for the complete terms, conditions, and next steps.\n"
+            "If you have any questions, our Talent Acquisition team will be happy to assist you.\n\n"
+            f"Warm regards,\n{company_name} Talent Acquisition Team"
         )
         pdf_content = self._build_offer_letter_pdf(
             candidate=candidate,
             host=host,
             protocol=protocol,
+            company_name=company_name,
             logo_data_uri=logo_data_uri,
         )
         if not pdf_content.startswith(b"%PDF"):
@@ -751,6 +906,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
                 body=text_content,
                 from_email=from_email,
                 to=[candidate.email],
+                connection=ConfiguredEmailBackend(fail_silently=False),
             )
             message.attach_alternative(html_message, "text/html")
             if logo_path and os.path.exists(logo_path):
@@ -779,7 +935,9 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
                 }
             )
 
-    def _build_offer_letter_pdf(self, candidate, host, protocol, logo_data_uri=None):
+    def _build_offer_letter_pdf(
+        self, candidate, host, protocol, company_name=None, logo_data_uri=None
+    ):
         buffer = BytesIO()
         try:
             html = render_to_string(
@@ -788,6 +946,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
                     "instance": candidate,
                     "host": host,
                     "protocol": protocol,
+                    "company_name": company_name or self._get_company_name(candidate),
                     "logo_data_uri": logo_data_uri,
                     "stamp_data_uri": self._get_stamp_data_uri(),
                     "signature_text": self._get_signature_text(candidate),
@@ -817,7 +976,18 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
     def _get_company_logo_path(self, candidate):
         company = getattr(getattr(candidate, "recruitment_id", None), "company_id", None)
         logo_field = getattr(company, "icon", None)
-        logo_path = getattr(logo_field, "path", None)
+        if not logo_field:
+            return None
+
+        logo_name = getattr(logo_field, "name", None)
+        if not logo_name:
+            return None
+
+        try:
+            logo_path = logo_field.path
+        except (AttributeError, NotImplementedError, ValueError):
+            return None
+
         if logo_path and os.path.exists(logo_path):
             return logo_path
         return None
@@ -871,9 +1041,7 @@ class OnboardingCandidateSerializer(serializers.ModelSerializer):
             ).decode("ascii")
 
     def _get_signature_text(self, candidate):
-        company = getattr(getattr(candidate, "recruitment_id", None), "company_id", None)
-        company_name = getattr(company, "company", "") or "Authorized Signatory"
-        return company_name
+        return self._get_company_name(candidate) or "Authorized Signatory"
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

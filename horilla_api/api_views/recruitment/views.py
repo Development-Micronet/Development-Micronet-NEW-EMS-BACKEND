@@ -1,6 +1,7 @@
 import logging
 from email.utils import formataddr
 
+from django.conf import settings
 from django.core.mail import EmailMessage
 from django.shortcuts import get_object_or_404
 from django.utils.html import escape
@@ -10,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from base.backends import ConfiguredEmailBackend
+from base.models import BrevoEmailConfiguration
 from employee.models import Employee
 from horilla_api.api_serializers.onboarding.serializers import (
     OnboardingCandidateSerializer,
@@ -37,8 +39,18 @@ from recruitment.models import (
 logger = logging.getLogger(__name__)
 ACE_RECRUITMENT_FROM_NAME = "Ace Technologies Recruitment Team"
 
+try:
+    from brevo_email_sender import BrevoEmailSender
+
+    BREVO_AVAILABLE = True
+except ImportError:
+    BREVO_AVAILABLE = False
+
 
 def _get_company_name(candidate):
+    brand_name = getattr(settings, "EMAIL_BRAND_NAME", "").strip()
+    if brand_name:
+        return brand_name
     company = getattr(getattr(candidate, "recruitment_id", None), "company_id", None)
     return getattr(company, "company", None) or "Ace Technologies"
 
@@ -51,6 +63,79 @@ def _get_recruitment_from_email():
     if sender_email:
         return formataddr((ACE_RECRUITMENT_FROM_NAME, sender_email))
     return ACE_RECRUITMENT_FROM_NAME
+
+
+def _get_recruitment_mail_sender():
+    from_email = getattr(settings, "BREVO_FROM_EMAIL", "").strip()
+    from_name = getattr(settings, "BREVO_FROM_NAME", "").strip() or ACE_RECRUITMENT_FROM_NAME
+    api_key = getattr(settings, "BREVO_API_KEY", "").strip()
+
+    if not api_key:
+        brevo_config = BrevoEmailConfiguration.objects.filter(is_active=True).first()
+        if brevo_config:
+            api_key = brevo_config.api_key
+            from_email = brevo_config.from_email
+            from_name = brevo_config.from_name or ACE_RECRUITMENT_FROM_NAME
+
+    if not from_email:
+        email_backend = ConfiguredEmailBackend()
+        from_email = (
+            getattr(email_backend, "dynamic_mail_sent_from", None)
+            or getattr(email_backend, "dynamic_username", None)
+            or "noreply@acetechnologies.com"
+        )
+
+    return {
+        "api_key": api_key,
+        "from_email": from_email,
+        "from_name": from_name or ACE_RECRUITMENT_FROM_NAME,
+    }
+
+
+def _send_recruitment_email(candidate, subject, html_content, text_content):
+    recipient_email = getattr(candidate, "email", None)
+    if not recipient_email:
+        return
+
+    recipient_name = getattr(candidate, "name", None) or "Candidate"
+    sender = _get_recruitment_mail_sender()
+
+    if BREVO_AVAILABLE and sender["api_key"]:
+        brevo_sender = BrevoEmailSender(
+            api_key=sender["api_key"],
+            from_email=sender["from_email"],
+            from_name=sender["from_name"],
+        )
+        success, message, _message_id = brevo_sender.send_email(
+            to_email=recipient_email,
+            to_name=recipient_name,
+            subject=subject,
+            html_content=html_content,
+            text_content=text_content,
+        )
+        if success:
+            logger.info(
+                "Recruitment email sent via Brevo to %s with subject %s",
+                recipient_email,
+                subject,
+            )
+            return
+        logger.warning(
+            "Brevo email failed for %s with subject %s: %s",
+            recipient_email,
+            subject,
+            message,
+        )
+
+    email = EmailMessage(
+        subject=subject,
+        body=html_content,
+        from_email=formataddr((sender["from_name"], sender["from_email"])),
+        to=[recipient_email],
+        connection=ConfiguredEmailBackend(fail_silently=False),
+    )
+    email.content_subtype = "html"
+    email.send(fail_silently=False)
 
 
 def _format_interview_date(value):
@@ -104,12 +189,14 @@ def _send_interview_schedule_email(interview, is_update=False):
         else f"{company_name} | Interview {schedule_label.capitalize()}"
     )
     description_block = ""
+    description_text = ""
     if interview.description:
         description_block = f"""
             <p style="margin:0 0 12px;color:#475467;line-height:1.7;">
                 <strong>Notes:</strong> {escape(interview.description)}
             </p>
         """
+        description_text = f"\nNotes: {interview.description}"
 
     body = f"""
     <div style="background:#f6f8fb;padding:32px 16px;font-family:Arial,sans-serif;color:#101828;">
@@ -148,16 +235,20 @@ def _send_interview_schedule_email(interview, is_update=False):
         </div>
     </div>
     """
-
-    email = EmailMessage(
-        subject=subject,
-        body=body,
-        from_email=_get_recruitment_from_email(),
-        to=[candidate_email],
-        connection=ConfiguredEmailBackend(),
+    text_content = (
+        f"Dear {candidate.name},\n\n"
+        f"Your interview has been {schedule_label}.\n"
+        f"Company: {_get_company_name(candidate)}\n"
+        f"Role: {_get_recruitment_title(candidate)}\n"
+        f"Date: {_format_interview_date(interview.interview_date)}\n"
+        f"Time: {_format_interview_time(interview.interview_time)}\n"
+        f"Interviewers: {', '.join(filter(None, interviewer_names)) or 'our hiring team'}"
+        f"{description_text}\n\n"
+        "Please be available a few minutes before the scheduled time. "
+        "If you need any assistance or would like to request a reschedule, reply to this email.\n\n"
+        f"Best regards,\nTalent Acquisition Team\n{_get_company_name(candidate)}"
     )
-    email.content_subtype = "html"
-    email.send(fail_silently=False)
+    _send_recruitment_email(candidate, subject, body, text_content)
 
 
 class RecruitmentPipelineAPIView(APIView):
@@ -497,7 +588,7 @@ class RecruitmentStageAPIView(APIView):
         )
 
 
-class RecruitmentInterviewAPIView(APIView):
+class LegacyRecruitmentInterviewAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -577,6 +668,90 @@ class RecruitmentInterviewAPIView(APIView):
                 {"error": "Interview ID required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        instance = get_object_or_404(InterviewSchedule, pk=pk)
+        instance.delete()
+        return Response(
+            {"message": "Interview deleted successfully"},
+            status=status.HTTP_200_OK,
+        )
+
+class RecruitmentInterviewAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = RecruitmentInterviewSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        interview = serializer.save()
+        interview.refresh_from_db()
+
+        try:
+            _send_interview_schedule_email(interview, is_update=False)
+        except Exception:
+            logger.exception(
+                "Failed to send interview email for interview id=%s",
+                interview.pk,
+            )
+
+        return Response(
+            {
+                "message": "Interview created successfully",
+                "data": RecruitmentInterviewSerializer(interview).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def get(self, request, pk=None):
+        queryset = InterviewSchedule.objects.select_related("candidate_id").prefetch_related(
+            "employee_id"
+        ).order_by("-interview_date", "-id")
+        if pk:
+            instance = get_object_or_404(queryset, pk=pk)
+            serializer = RecruitmentInterviewSerializer(instance)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        serializer = RecruitmentInterviewSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, pk=None):
+        if not pk:
+            return Response(
+                {"error": "Interview ID required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        instance = get_object_or_404(InterviewSchedule, pk=pk)
+        serializer = RecruitmentInterviewSerializer(
+            instance, data=request.data, partial=True, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        interview = serializer.save()
+        interview.refresh_from_db()
+
+        try:
+            _send_interview_schedule_email(interview, is_update=True)
+        except Exception:
+            logger.exception(
+                "Failed to send updated interview email for interview id=%s",
+                interview.pk,
+            )
+
+        return Response(
+            {
+                "message": "Interview updated successfully",
+                "data": RecruitmentInterviewSerializer(interview).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, pk=None):
+        if not pk:
+            return Response(
+                {"error": "Interview ID required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         instance = get_object_or_404(InterviewSchedule, pk=pk)
         instance.delete()
         return Response(
