@@ -430,7 +430,7 @@ class ForgotPasswordAPIView(APIView):
             return {
                 "api_key": api_key,
                 "from_email": from_email or "noreply@horilla.com",
-                "from_name": from_name or "HR Management",
+                "from_name": from_name or "Ace Technologies",
             }
 
         # Priority 2: Database config

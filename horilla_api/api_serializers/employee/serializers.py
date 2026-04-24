@@ -485,7 +485,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
         if BREVO_AVAILABLE:
             api_key = getattr(settings, "BREVO_API_KEY", "").strip()
             from_email = getattr(settings, "BREVO_FROM_EMAIL", "noreply@horilla.com")
-            from_name = getattr(settings, "BREVO_FROM_NAME", "HR Management")
+            from_name = getattr(settings, "BREVO_FROM_NAME", "Ace Technologies")
             if not api_key:
                 brevo_config = BrevoEmailConfiguration.objects.filter(
                     is_active=True
