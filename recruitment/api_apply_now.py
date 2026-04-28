@@ -204,7 +204,7 @@ class ApplyNowViewSet(viewsets.ModelViewSet):
             self._send_application_confirmation(candidate)
         except Exception as e:
             logger.exception("Email failed: %s", str(e))
-    raise  # TEMP: re-raise to see the actual error
+            raise  # TEMP: re-raise to see the actual error
         headers = self.get_success_headers(serializer.data)
         data = serializer.data
         response_data = dict(data)
