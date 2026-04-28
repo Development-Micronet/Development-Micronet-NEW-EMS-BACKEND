@@ -8,12 +8,12 @@ def get_email_branding_context():
     support_email = getattr(
         settings,
         "EMAIL_SUPPORT_EMAIL",
-        "info@acetechnologys.com",
+        "admin@acetechnologys.com",
     ).strip()
 
     return {
         "brand_name": brand_name or "Ace Technologies",
-        "support_email": support_email or "info@acetechnologys.com",
+        "support_email": support_email or "admin@acetechnologys.com",
     }
 
 

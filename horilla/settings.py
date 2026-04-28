@@ -394,7 +394,7 @@ BREVO_API_KEY = env("BREVO_API_KEY", default="")
 BREVO_FROM_EMAIL = env("BREVO_FROM_EMAIL", default="noreply@horilla.com")
 BREVO_FROM_NAME = env("BREVO_FROM_NAME", default="Ace Technologies")
 EMAIL_BRAND_NAME = env("EMAIL_BRAND_NAME", default="Ace Technologies")
-EMAIL_SUPPORT_EMAIL = env("EMAIL_SUPPORT_EMAIL", default="info@acetechnologys.com")
+EMAIL_SUPPORT_EMAIL = env("EMAIL_SUPPORT_EMAIL", default="admin@acetechnologys.com")
 PUBLIC_BACKEND_URL = env(
     "PUBLIC_BACKEND_URL",
     default="" if DEBUG else "http://13.202.113.121",

@@ -1,3 +1,4 @@
+import base64
 import time
 from unittest.mock import patch
 
@@ -342,6 +343,65 @@ class AuthRecruitmentOffboardingAPITest(TestCase):
         assert response.json()["stage_managers"] == [
             {"id": inactive_employee.id, "name": inactive_employee.get_full_name()}
         ]
+
+    @override_settings(EMAIL_BRAND_NAME="Ace Technologies")
+    @patch("recruitment.api_apply_now._send_recruitment_email")
+    def test_apply_now_sends_professional_confirmation_email(self, mock_send_email):
+        department = Department.objects.create(department="Apply Now Department")
+        job_position = JobPosition.objects.create(
+            job_position="Python Developer",
+            department_id=department,
+        )
+        recruitment = Recruitment.objects.create(
+            title="Backend Engineer",
+            description="Public hiring flow",
+            is_event_based=True,
+            is_published=True,
+            vacancy=2,
+            company_id=self.company,
+        )
+        recruitment.open_positions.add(job_position)
+        applied_stage = recruitment.stage_set.filter(stage_type="applied").first()
+        if not applied_stage:
+            applied_stage = Stage.objects.create(
+                recruitment_id=recruitment,
+                stage="Applied",
+                stage_type="applied",
+                sequence=1,
+            )
+
+        response = self.client.post(
+            "/api/recruitment/apply-now/",
+            {
+                "name": "Public Candidate",
+                "recruitment_id": recruitment.id,
+                "job_position_id": job_position.id,
+                "email": "public.candidate@example.com",
+                "mobile": "9999999915",
+                "resume": base64.b64encode(b"%PDF-1.4 apply now").decode("utf-8"),
+                "gender": "female",
+                "address": "Nagpur",
+                "country": "India",
+                "state": "Maharashtra",
+                "city": "Nagpur",
+                "zip": "440013",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        assert response.json()["status"] == "applied"
+
+        candidate = Candidate.objects.get(email="public.candidate@example.com")
+        assert candidate.stage_id_id == applied_stage.id
+
+        mock_send_email.assert_called_once()
+        sent_candidate, subject, html_content, text_content = mock_send_email.call_args[0]
+        assert sent_candidate.id == candidate.id
+        assert subject == "Application Received - Backend Engineer at Ace Technologies"
+        assert "Thank you for applying" in html_content
+        assert "Ace Technologies Recruitment Team" in html_content
+        assert "application has been received successfully" in text_content
 
     def test_recruitment_candidate_post_accepts_inactive_employee_user_id_in_referral(self):
         self.client.force_authenticate(user=self.user)
