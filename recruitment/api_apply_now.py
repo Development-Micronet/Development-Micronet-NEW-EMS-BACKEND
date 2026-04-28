@@ -200,10 +200,13 @@ class ApplyNowViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         candidate = self.perform_create(serializer)
+        print(candidate)
         try:
             self._send_application_confirmation(candidate)
+            print("email send successfully")
         except Exception as e:
             logger.exception("Email failed: %s", str(e))
+            print("emnail failed")
             raise  # TEMP: re-raise to see the actual error
         headers = self.get_success_headers(serializer.data)
         data = serializer.data
