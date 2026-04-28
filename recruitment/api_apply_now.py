@@ -202,11 +202,9 @@ class ApplyNowViewSet(viewsets.ModelViewSet):
         candidate = self.perform_create(serializer)
         try:
             self._send_application_confirmation(candidate)
-        except Exception:
-            logger.exception(
-                "Failed to send application confirmation email for candidate %s",
-                getattr(candidate, "id", None),
-            )
+        except Exception as e:
+            logger.exception("Email failed: %s", str(e))
+    raise  # TEMP: re-raise to see the actual error
         headers = self.get_success_headers(serializer.data)
         data = serializer.data
         response_data = dict(data)
