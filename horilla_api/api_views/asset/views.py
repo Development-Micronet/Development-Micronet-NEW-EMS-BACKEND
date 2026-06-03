@@ -1,6 +1,7 @@
 # --- Asset Request API for Employee ---
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -37,7 +38,8 @@ class AssetRequestUserAPIView(APIView):
         requests = AssetRequest.objects.filter(
             requested_employee_id=request.user.employee_get
         )
-        page = list(requests)
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(requests, request)
         result = []
         for req in page:
             result.append(
@@ -56,7 +58,7 @@ class AssetRequestUserAPIView(APIView):
                     ),
                 }
             )
-        return Response(result)
+        return paginator.get_paginated_response(result)
 
     def put(self, request, pk=None):
         if not pk:
@@ -110,6 +112,7 @@ class AssetRequestUserAPIView(APIView):
 
 
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -138,9 +141,10 @@ class AssetCreateAPIView(APIView):
         queryset = Asset.objects.all()
         if category_id:
             queryset = queryset.filter(asset_category_id=category_id)
-        page = list(queryset)
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(queryset, request)
         serializer = AssetSerializer(page, many=True)
-        return Response(serializer.data)
+        return paginator.get_paginated_response(serializer.data)
 
     def put(self, request, pk=None):
         if not pk:
@@ -169,6 +173,7 @@ class AssetCreateAPIView(APIView):
 
 
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -195,9 +200,10 @@ class AssetCategoryAPIView(APIView):
             return Response(AssetCategorySerializer(category).data)
         queryset = AssetCategory.objects.all()
         filterset = self.filterset_class(request.GET, queryset=queryset)
-        page = list(filterset.qs)
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(filterset.qs, request)
         serializer = AssetCategorySerializer(page, many=True)
-        return Response(serializer.data)
+        return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
         serializer = AssetCategorySerializer(data=request.data)
@@ -238,6 +244,7 @@ from datetime import date
 from django.http import QueryDict
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -285,9 +292,10 @@ class AssetViewAPIView(APIView):
             return Response(AssetSerializer(asset).data)
         queryset = Asset.objects.all()
         filterset = self.filterset_class(request.GET, queryset=queryset)
-        page = list(filterset.qs)
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(filterset.qs, request)
         serializer = AssetGetAllSerializer(page, many=True)
-        return Response(serializer.data)
+        return paginator.get_paginated_response(serializer.data)
 
 
 class AssetBatchAPIView(APIView):
@@ -300,9 +308,10 @@ class AssetBatchAPIView(APIView):
                 return Response({"detail": "Not found."}, status=404)
             return Response(AssetLotSerializer(batch).data)
         batches = AssetLot.objects.all()
-        page = list(batches)
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(batches, request)
         serializer = AssetLotSerializer(page, many=True)
-        return Response(serializer.data)
+        return paginator.get_paginated_response(serializer.data)
 
 
 class AssetRequestAllocationAPIView(APIView):
@@ -315,9 +324,10 @@ class AssetRequestAllocationAPIView(APIView):
                 return Response({"detail": "Not found."}, status=404)
             return Response(AssetRequestGetSerializer(req).data)
         requests = AssetRequest.objects.all().order_by("-id")
-        page = list(requests)
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(requests, request)
         serializer = AssetRequestGetSerializer(page, many=True)
-        return Response(serializer.data)
+        return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
         serializer = AssetRequestSerializer(data=request.data)
@@ -337,9 +347,10 @@ class AssetHistoryAPIView(APIView):
                 return Response({"detail": "Not found."}, status=404)
             return Response(AssetAssignmentGetSerializer(assign).data)
         assignments = AssetAssignment.objects.all().order_by("-id")
-        page = list(assignments)
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(assignments, request)
         serializer = AssetAssignmentGetSerializer(page, many=True)
-        return Response(serializer.data)
+        return paginator.get_paginated_response(serializer.data)
 
 
 class AssetRejectAPIView(APIView):

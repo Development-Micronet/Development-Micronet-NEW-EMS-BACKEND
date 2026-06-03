@@ -17,11 +17,12 @@ for app_name in REST_APPS:
 
 REST_FRAMEWORK_SETTINGS = {
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
-
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "horilla_api.auth.RejectBasicAuthentication",
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
+    "PAGE_SIZE": 20,
 }
 
 SIMPLE_JWT = {

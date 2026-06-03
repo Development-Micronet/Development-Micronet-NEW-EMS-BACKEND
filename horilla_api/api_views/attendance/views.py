@@ -216,6 +216,7 @@ from django.http import QueryDict
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -830,9 +831,10 @@ class AttendanceView(APIView):
     #             request, url, field_name, attendances_filter_queryset
     #         )
     #     # pagination workflow
-    #    #     page = list(attendances_filter_queryset)
+    #     paginater = PageNumberPagination()
+    #     page = paginater.paginate_queryset(attendances_filter_queryset, request)
     #     serializer = AttendanceSerializer(page, many=True)
-    #     return Response(serializer.data)
+    #     return paginater.get_paginated_response(serializer.data)
 
     def get(self, request, pk=None, type=None):
         # single record
@@ -858,9 +860,10 @@ class AttendanceView(APIView):
                 request, url, field_name, attendances_filter_queryset
             )
 
-        page = list(attendances_filter_queryset)
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(attendances_filter_queryset, request)
         data = [self._attendance_response(att) for att in page]
-        return Response(data)
+        return paginator.get_paginated_response(data)
 
     def _as_time(self, value):
         if value is None:
@@ -1294,9 +1297,10 @@ class AttendanceRequestView(APIView):
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, request_filtered_queryset)
 
-        page = list(request_filtered_queryset)
+        pagenation = PageNumberPagination()
+        page = pagenation.paginate_queryset(request_filtered_queryset, request)
         serializer = self.serializer_class(page, many=True)
-        return Response(serializer.data)
+        return pagenation.get_paginated_response(serializer.data)
 
     @document_api(
         operation_description="Create a new attendance request (absence validation, work type change, etc.)",
@@ -1523,9 +1527,10 @@ class AttendanceOverTimeView(APIView):
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, queryset)
 
-        page = list(queryset)
+        pagenation = PageNumberPagination()
+        page = pagenation.paginate_queryset(queryset, request)
         serializer = AttendanceOverTimeSerializer(page, many=True)
-        return Response(serializer.data)
+        return pagenation.get_paginated_response(serializer.data)
 
     @manager_permission_required("attendance.add_attendanceovertime")
     def post(self, request):
@@ -1717,8 +1722,9 @@ class OfflineEmployeesListView(APIView):
         # Get leave status for the filtered employees
         leave_status = self.get_leave_status(filtered_qs)
 
-        page = list(leave_status)
-        return Response(page)
+        pagenation = PageNumberPagination()
+        page = pagenation.paginate_queryset(leave_status, request)
+        return pagenation.get_paginated_response(page)
 
     def get_leave_status(self, queryset):
 
@@ -1952,11 +1958,12 @@ class UserAttendanceView(APIView):
             employee_id=employee_id
         ).order_by("-id")
 
+        paginator = PageNumberPagination()
         paginator.page_size = 20
-        page = list(attendance_queryset)
+        page = paginator.paginate_queryset(attendance_queryset, request)
 
         serializer = self.serializer_class(page, many=True)
-        return Response(serializer.data)
+        return paginator.get_paginated_response(serializer.data)
 
 
 class AttendanceTypeAccessCheck(APIView):

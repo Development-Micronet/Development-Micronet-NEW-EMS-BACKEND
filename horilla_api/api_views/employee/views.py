@@ -7,6 +7,7 @@ from django.http import Http404, JsonResponse
 from django.utils.decorators import method_decorator
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.renderers import JSONRenderer
@@ -68,6 +69,9 @@ from ...api_serializers.employee.serializers import (
 from ...docs import document_api
 
 
+class EmployeeJSONPagination(PageNumberPagination):
+    page_size_query_param = "page_size"
+    max_page_size = 100
 
 
 # --- WorkTypeRequest APIView ---
@@ -260,11 +264,12 @@ class EmployeeTypeAPIView(APIView):
                 )
 
         # List with pagination
+        paginator = PageNumberPagination()
         employee_types = EmployeeType.objects.all()
-        page = list(employee_types)
+        page = paginator.paginate_queryset(employee_types, request)
         if page is not None:
             serializer = EmployeeTypeSerializer(page, many=True)
-            return Response(serializer.data)
+            return paginator.get_paginated_response(serializer.data)
 
         serializer = EmployeeTypeSerializer(employee_types, many=True)
         return Response({"results": serializer.data}, status=200)
@@ -435,7 +440,8 @@ class EmployeeAPIView(APIView):
             {"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN
         )
 
-        #        # if request.user.has_perm('employee.view_employee'):
+        # paginator = PageNumberPagination()
+        # if request.user.has_perm('employee.view_employee'):
         #     employees_queryset = Employee.objects.all()
         # elif request.user.employee_get.get_subordinate_employees():
         #     employees_queryset = request.user.employee_get.get_subordinate_employees()
@@ -447,9 +453,9 @@ class EmployeeAPIView(APIView):
         # if field_name:
         #     url = request.build_absolute_uri()
         #     return groupby_queryset(request, url, field_name, employees_filter_queryset)
-        # page = list(employees_filter_queryset)
+        # page = paginator.paginate_queryset(employees_filter_queryset, request)
         # serializer = EmployeeSerializer(page, many=True)
-        # return Response(serializer.data)
+        # return paginator.get_paginated_response(serializer.data)
 
     @method_decorator(permission_required("employee.add_employee"))
     def post(self, request):
@@ -808,7 +814,8 @@ class EmployeeAPIView(APIView):
             )
 
         # Paginate
-        page = list(employees_queryset)
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(employees_queryset, request)
         page_employee_ids = [employee.id for employee in page] if page else []
         attendance_checked_in_ids = set(
             Attendance.objects.filter(
@@ -832,7 +839,7 @@ class EmployeeAPIView(APIView):
             many=True,
             context={"checked_in_employee_ids": checked_in_employee_ids},
         )
-        return Response(serializer.data)
+        return paginator.get_paginated_response(serializer.data)
 
     @method_decorator(permission_required("employee.add_employee"))
     def post(self, request):
@@ -1017,9 +1024,10 @@ class EmployeeBankDetailsAPIView(APIView):
         queryset = self.get_queryset()
 
         if pk is None:
-            page = list(queryset)
+            paginator = PageNumberPagination()
+            page = paginator.paginate_queryset(queryset, request)
             serializer = EmployeeBankDetailsSerializer(page, many=True)
-            return Response(serializer.data)
+            return paginator.get_paginated_response(serializer.data)
 
         try:
             bank_detail = queryset.get(pk=pk)
@@ -1114,9 +1122,10 @@ class AdminEmployeeBankDetailsAPIView(APIView):
 
         if pk is None:
             queryset = EmployeeBankDetails.objects.filter(employee_id__role="admin")
-            page = list(queryset)
+            paginator = PageNumberPagination()
+            page = paginator.paginate_queryset(queryset, request)
             serializer = EmployeeBankDetailsSerializer(page, many=True)
-            return Response(serializer.data)
+            return paginator.get_paginated_response(serializer.data)
 
         # detail
         try:
@@ -1207,13 +1216,14 @@ class EmployeeWorkInformationAPIView(APIView):
             )
             # ✅ order
             print("WORK INFO COUNT:", queryset.count())
+            paginator = EmployeeJSONPagination()
             paginator.page_size = 100
 
-            page = list(queryset)
+            page = paginator.paginate_queryset(queryset, request)
 
             if page is not None:
                 serializer = EmployeeWorkInformationSerializer(page, many=True)
-                return Response(serializer.data)
+                return paginator.get_paginated_response(serializer.data)
 
             # 🔸 fallback (no pagination)
             serializer = EmployeeWorkInformationSerializer(queryset, many=True)
@@ -1482,9 +1492,10 @@ class ActiontypeView(APIView):
             serializer = self.serializer_class(action_type)
             return Response(serializer.data, status=200)
         action_types = Actiontype.objects.all()
-        page = list(action_types)
+        paginater = PageNumberPagination()
+        page = paginater.paginate_queryset(action_types, request)
         serializer = self.serializer_class(page, many=True)
-        return Response(serializer.data)
+        return paginater.get_paginated_response(serializer.data)
 
     def post(self, request):
         if permission_check(request, "employee.add_actiontype") is False:
@@ -1585,6 +1596,7 @@ class DisciplinaryActionAPIView(APIView):
             else:
                 queryset = DisciplinaryAction.objects.filter(employee_id=employee)
 
+            paginator = PageNumberPagination()
             disciplinary_actions = queryset
             disciplinary_action_filter_queryset = self.filterset_class(
                 request.GET, queryset=disciplinary_actions
@@ -1593,7 +1605,7 @@ class DisciplinaryActionAPIView(APIView):
                 disciplinary_action_filter_queryset, request
             )
             serializer = DisciplinaryActionSerializer(page, many=True)
-            return Response(serializer.data)
+            return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
         if permission_check(request, "employee.add_disciplinaryaction") is False:
@@ -1674,11 +1686,12 @@ class PolicyAPIView(APIView):
                 policies = Policy.objects.filter(title__icontains=search)
             else:
                 policies = Policy.objects.all()
-            page = list(policies)
+            paginator = PageNumberPagination()
+            page = paginator.paginate_queryset(policies, request)
             serializer = EmployeePolicySerializer(
                 page, many=True, context={"request": request}
             )
-            return Response(serializer.data)
+            return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
         if not self._is_admin(request):
@@ -1754,12 +1767,13 @@ class DocumentRequestAPIView(APIView):
             return Response(data)
         else:
             document_requests = DocumentRequest.objects.all()
-            page = list(document_requests)
+            pagination = PageNumberPagination()
+            page = pagination.paginate_queryset(document_requests, request)
             serializer = DocumentRequestSerializer(page, many=True)
             results = serializer.data
             for item in results:
                 item.pop("id", None)
-            return Response(results)
+            return pagination.get_paginated_response(results)
 
     @manager_permission_required("horilla_documents.add_documentrequests")
     def post(self, request):
@@ -1851,9 +1865,10 @@ class DocumentAPIView(APIView):
             document_requests_filtered = self.filterset_class(
                 request.GET, queryset=documents
             ).qs
-            page = list(document_requests_filtered)
+            paginator = PageNumberPagination()
+            page = paginator.paginate_queryset(document_requests_filtered, request)
             serializer = DocumentSerializer(page, many=True)
-            return Response(serializer.data)
+            return paginator.get_paginated_response(serializer.data)
 
     @manager_or_owner_permission_required(
         DocumentRequest, "horilla_documents.add_document"
@@ -1989,9 +2004,10 @@ class EmployeeSelectorView(APIView):
         if request.user.has_perm("employee.view_employee"):
             employees = Employee.objects.all()
 
-        page = list(employees)
+        paginator = PageNumberPagination()
+        page = paginator.paginate_queryset(employees, request)
         serializer = EmployeeSelectorSerializer(page, many=True)
-        return Response(serializer.data)
+        return paginator.get_paginated_response(serializer.data)
 
 
 class ReportingManagerCheck(APIView):
@@ -2019,14 +2035,15 @@ class ShiftRequestAPIView(APIView):
             return Response(data)
         else:
             shift_requests = ShiftRequest.objects.all()
-            page = list(shift_requests)
+            paginator = PageNumberPagination()
+            page = paginator.paginate_queryset(shift_requests, request)
             serializer = ShiftRequestSerializer(page, many=True)
             results = serializer.data
             for item in results:
                 item.pop("id", None)
                 if "employee" in item:
                     item["employee_id"] = item.pop("employee")
-            return Response(results)
+            return paginator.get_paginated_response(results)
 
     def post(self, request):
         serializer = ShiftRequestSerializer(data=request.data)

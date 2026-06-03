@@ -1,3 +1,4 @@
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,9 +17,10 @@ class NotificationView(APIView):
         elif type == "unread":
             queryset = request.user.notifications.unread()
 
-        page = list(queryset)
+        pagination = PageNumberPagination()
+        page = pagination.paginate_queryset(queryset, request)
         serializer = NotificationSerializer(page, many=True)
-        return Response(serializer.data)
+        return pagination.get_paginated_response(serializer.data)
 
 
 class NotificationReadDelView(APIView):
