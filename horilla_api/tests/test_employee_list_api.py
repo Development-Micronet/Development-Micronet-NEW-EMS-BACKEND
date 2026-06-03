@@ -28,9 +28,8 @@ class EmployeeListAPITest(TestCase):
         response = self.client.get("/api/employee/list/employees/")
         assert response.status_code == 200
         data = response.json()
-        # Expect paginated response with count equal to 3
-        assert data.get("count") == 3
-        assert len(data.get("results", [])) == 3
+        assert isinstance(data, list)
+        assert len(data) == 3
 
     def test_list_returns_json_even_when_browser_accept_header_is_used(self):
         response = self.client.get(
@@ -39,16 +38,17 @@ class EmployeeListAPITest(TestCase):
 
         assert response.status_code == 200
         assert response["Content-Type"].startswith("application/json")
-        assert response.json().get("count") == 3
+        assert len(response.json()) == 3
 
-    def test_invalid_page_returns_json_error_response(self):
+    def test_page_query_param_is_ignored_when_pagination_is_disabled(self):
         response = self.client.get(
             "/api/employee/list/employees/?page=999", HTTP_ACCEPT="text/html"
         )
 
-        assert response.status_code == 404
+        assert response.status_code == 200
         assert response["Content-Type"].startswith("application/json")
-        assert "detail" in response.json()
+        assert isinstance(response.json(), list)
+        assert len(response.json()) == 3
 
     def test_post_can_create_admin_employee_without_duplicate_employee_error(self):
         payload = {

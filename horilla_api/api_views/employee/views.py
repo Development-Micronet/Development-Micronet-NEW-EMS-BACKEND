@@ -886,7 +886,7 @@ class EmployeeListAPIView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     @document_api(
-        operation_description="Get list of employees with pagination and optional search by name",
+        operation_description="Get full list of employees with optional search by name",
         tags=["Employee Management"],
     )
     def get(self, request):
@@ -904,13 +904,10 @@ class EmployeeListAPIView(APIView):
             )
 
         employees_queryset = employees_queryset.order_by("id")
-        paginator = EmployeeJSONPagination()
-        page = paginator.paginate_queryset(employees_queryset, request)
-
-        page_employee_ids = [employee.id for employee in page] if page else []
+        employee_ids = list(employees_queryset.values_list("id", flat=True))
         attendance_checked_in_ids = set(
             Attendance.objects.filter(
-                employee_id_id__in=page_employee_ids,
+                employee_id_id__in=employee_ids,
                 attendance_date=date.today(),
                 attendance_clock_in__isnull=False,
                 attendance_clock_out__isnull=True,
@@ -918,7 +915,7 @@ class EmployeeListAPIView(APIView):
         )
         activity_checked_in_ids = set(
             AttendanceActivity.objects.filter(
-                employee_id_id__in=page_employee_ids,
+                employee_id_id__in=employee_ids,
                 attendance_date=date.today(),
                 clock_in__isnull=False,
                 clock_out__isnull=True,
@@ -926,11 +923,11 @@ class EmployeeListAPIView(APIView):
         )
         checked_in_employee_ids = attendance_checked_in_ids | activity_checked_in_ids
         serializer = EmployeeListSerializer(
-            page,
+            employees_queryset,
             many=True,
             context={"checked_in_employee_ids": checked_in_employee_ids},
         )
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @method_decorator(permission_required("employee.add_employee"))
     def post(self, request):
