@@ -1,0 +1,506 @@
+openapi: 3.0.3
+info:
+  title: Horilla Onboarding API
+  version: 1.0.0
+  description: OpenAPI for onboarding JSON/AJAX endpoints mounted at /onboarding.
+servers:
+  - url: /onboarding
+tags:
+  - name: Onboarding
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
+  schemas:
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        type:
+          type: string
+    TypeResponse:
+      type: object
+      properties:
+        type:
+          type: string
+    CandidateListResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        count:
+          type: integer
+        num_pages:
+          type: integer
+        current_page:
+          type: integer
+    GroupedCandidateResponse:
+      type: object
+      properties:
+        grouped_results:
+          type: array
+          items:
+            type: object
+            properties:
+              group:
+                type: string
+              candidates:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+paths:
+  /candidates-view/:
+    get:
+      tags: [Onboarding]
+      summary: List hired candidates (JSON mode)
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [json]
+        - in: query
+          name: page
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Candidate list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CandidateListResponse'
+
+  /candidate-filter:
+    get:
+      tags: [Onboarding]
+      summary: Filter candidates (JSON mode)
+      parameters:
+        - in: query
+          name: format
+          schema:
+            type: string
+            enum: [json]
+        - in: query
+          name: field
+          schema:
+            type: string
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: orderby
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Grouped or flat list
+          content:
+            application/json:
+              oneOf:
+                - $ref: '#/components/schemas/CandidateListResponse'
+                - $ref: '#/components/schemas/GroupedCandidateResponse'
+
+  /candidate-task-update/{taskId}:
+    post:
+      tags: [Onboarding]
+      summary: Update candidate task status
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [todo, scheduled, ongoing, stuck, done]
+                single_view:
+                  type: string
+                candId:
+                  type: integer
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          description: Invalid status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /candidate-task-bulk-update:
+    post:
+      tags: [Onboarding]
+      summary: Bulk update candidate task status
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: string
+                  description: JSON list string. Example [1,2,3]
+                task:
+                  type: integer
+                status:
+                  type: string
+                  enum: [todo, scheduled, ongoing, stuck, done]
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          description: Invalid status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /candidate-stage-update/{candidate_id}/{recruitment_id}/:
+    post:
+      tags: [Onboarding]
+      summary: Update one candidate stage
+      parameters:
+        - in: path
+          name: candidate_id
+          required: true
+          schema:
+            type: integer
+        - in: path
+          name: recruitment_id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                stage:
+                  type: integer
+                is_ajax:
+                  type: string
+      responses:
+        '200':
+          description: Usually HTML table fragment; may return JSON message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+            text/html:
+              schema:
+                type: string
+
+  /candidate-stage-bulk-update:
+    post:
+      tags: [Onboarding]
+      summary: Bulk update candidate stages
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: string
+                  description: JSON list string. Example [1,2,3]
+                recruitment:
+                  type: integer
+                stage:
+                  type: integer
+      responses:
+        '200':
+          description: HTML fragment with success/error alert
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /update-joining:
+    post:
+      tags: [Onboarding]
+      summary: Update candidate joining date
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                candId:
+                  type: integer
+                date:
+                  type: string
+                  format: date
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TypeResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TypeResponse'
+
+  /update-probation-end:
+    post:
+      tags: [Onboarding]
+      summary: Update candidate probation end date
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                candidate_id:
+                  type: integer
+                probation_end:
+                  type: string
+                  format: date
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TypeResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TypeResponse'
+        '404':
+          description: Candidate not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TypeResponse'
+
+  /candidate-sequence-update:
+    post:
+      tags: [Onboarding]
+      summary: Update candidate sequence ordering
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                sequenceData:
+                  type: string
+                  description: JSON map string. Example {"25":1,"29":2}
+      responses:
+        '200':
+          description: Updated/unchanged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /stage-sequence-update:
+    post:
+      tags: [Onboarding]
+      summary: Update stage sequence ordering
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                sequenceData:
+                  type: string
+                  description: JSON map string. Example {"3":1,"4":2}
+      responses:
+        '200':
+          description: Updated/unchanged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /onboard-candidate-chart:
+    get:
+      tags: [Onboarding]
+      summary: Dashboard chart - onboard started candidates per recruitment
+      responses:
+        '200':
+          description: Chart payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  labels:
+                    type: array
+                    items:
+                      type: string
+                  data:
+                    type: array
+                    items:
+                      type: integer
+                  background_color:
+                    type: array
+                    items:
+                      type: string
+                  border_color:
+                    type: array
+                    items:
+                      type: string
+                  message:
+                    type: string
+
+  /stage-chart:
+    get:
+      tags: [Onboarding]
+      summary: Dashboard chart - candidates per stage for one recruitment
+      parameters:
+        - in: query
+          name: recruitment
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Chart payload
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /candidate-select/:
+    get:
+      tags: [Onboarding]
+      summary: Get all selectable candidate IDs
+      responses:
+        '200':
+          description: IDs + total
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  employee_ids:
+                    type: array
+                    items:
+                      type: string
+                  total_count:
+                    type: integer
+
+  /candidate-select-filter-onboarding:
+    get:
+      tags: [Onboarding]
+      summary: Get selectable IDs for filtered candidates
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: string
+            example: all
+        - in: query
+          name: filter
+          schema:
+            type: string
+            description: JSON stringified filter object
+      responses:
+        '200':
+          description: IDs + total
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  employee_ids:
+                    type: array
+                    items:
+                      type: string
+                  total_count:
+                    type: integer
+
+  /offer-letter-bulk-status-update/:
+    get:
+      tags: [Onboarding]
+      summary: Bulk update offer letter status
+      parameters:
+        - in: query
+          name: ids
+          required: true
+          schema:
+            type: string
+            description: JSON list string. Example [1,2]
+        - in: query
+          name: status
+          required: true
+          schema:
+            type: string
+            enum: [not_sent, sent, accepted, rejected, joined]
+      responses:
+        '200':
+          description: success
+          content:
+            application/json:
+              schema:
+                type: string
+                example: success
+
+  /onboarding-candidate-bulk-delete/:
+    get:
+      tags: [Onboarding]
+      summary: Bulk delete onboarding candidates
+      parameters:
+        - in: query
+          name: ids
+          required: true
+          schema:
+            type: string
+            description: JSON list string. Example [1,2]
+      responses:
+        '200':
+          description: success
+          content:
+            application/json:
+              schema:
+                type: string
+                example: success
+security:
+  - bearerAuth: []
+  - cookieAuth: []

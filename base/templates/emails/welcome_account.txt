@@ -1,0 +1,19 @@
+Welcome to {{ brand_name }}
+
+Hello {{ recipient_name }},
+
+Your employee account has been created successfully.
+
+Login credentials:
+Username: {{ username }}
+Temporary Password: {{ password }}
+{% if login_url %}
+
+Login URL:
+{{ login_url }}
+{% endif %}
+
+For security, please sign in and change your password as soon as possible.
+
+{{ brand_name }}
+Support: {{ support_email }}

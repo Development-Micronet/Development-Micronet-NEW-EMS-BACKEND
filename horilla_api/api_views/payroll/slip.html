@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 12px;
+    margin: 20px;
+}
+
+.payslip-box {
+    border: 2px solid #333;
+}
+
+.header {
+    border-bottom: 2px solid #333;
+    padding: 10px;
+    text-align: center;
+}
+
+.company-name {
+    font-size: 20px;
+    font-weight: bold;
+}
+
+.company-address {
+    font-size: 12px;
+}
+
+.payslip-title {
+    font-size: 14px;
+    margin-top: 4px;
+}
+
+.section {
+    border-bottom: 2px solid #333;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+td, th {
+    border: 1px solid #333;
+    padding: 6px;
+}
+
+.no-border td {
+    border: none;
+}
+
+.label {
+    font-weight: bold;
+}
+
+.center {
+    text-align: center;
+}
+
+.right {
+    text-align: right;
+}
+
+.bold {
+    font-weight: bold;
+}
+</style>
+</head>
+
+<body>
+
+<div class="payslip-box">
+
+    <!-- Header -->
+    <div class="header">
+        <div class="company-name">{{ company_name }}</div>
+        <div class="company-address">{{ company_address }}</div>
+        <div class="payslip-title">
+            Pay Slip for {{ payslip.start_date|date:"F Y" }}
+        </div>
+    </div>
+
+    <!-- Employee Details -->
+    <div class="section">
+        <table class="no-border">
+            <tr>
+                <td class="label">Employee ID</td>
+                <td>{{ employee.badge_id }}</td>
+
+                <td class="label">UAN</td>
+                <td>{{ employee.uan }}</td>
+            </tr>
+
+            <tr>
+                <td class="label">Employee Name</td>
+                <td>{{ employee.first_name }} {{ employee.last_name }}</td>
+
+                <td class="label">PF No.</td>
+                <td>{{ employee.pf_number }}</td>
+            </tr>
+
+            <tr>
+                <td class="label">Designation</td>
+                <td>{{ payslip.job_position }}</td>
+
+                <td class="label">ESI No.</td>
+                <td>{{ employee.esi_number }}</td>
+            </tr>
+
+            <tr>
+                <td class="label">Department</td>
+                <td>{{ payslip.department }}</td>
+
+                <td class="label">Bank</td>
+                <td>{{ payslip.bank_name }}</td>
+            </tr>
+
+            <tr>
+                <td class="label">Date of Joining</td>
+                <td>{{ employee.date_joining }}</td>
+
+                <td class="label">Account No.</td>
+                <td>{{ payslip.account_number }}</td>
+            </tr>
+        </table>
+    </div>
+
+    <!-- Working Info -->
+    <div class="section">
+        <table>
+            <tr>
+                <td class="label">Gross Wages</td>
+                <td class="right">{{ currency }}{{ payslip.basic_salary }}</td>
+                <td></td>
+                <td></td>
+            </tr>
+
+            <tr>
+                <td class="label">Total Working Days</td>
+                <td>{{ payslip.total_working_days }}</td>
+
+                <td class="label">Leaves</td>
+                <td>{{ payslip.leaves }}</td>
+            </tr>
+
+            <tr>
+                <td class="label">LOP Days</td>
+                <td>{{ payslip.lop_days }}</td>
+
+                <td class="label">Paid Days</td>
+                <td>{{ payslip.paid_days }}</td>
+            </tr>
+        </table>
+    </div>
+
+    <!-- Earnings / Deductions -->
+    <table>
+        <tr class="bold center">
+            <th colspan="2">Earnings</th>
+            <th colspan="2">Deductions</th>
+        </tr>
+
+        <tr>
+            <td>Basic</td>
+            <td class="right">{{ currency }}{{ payslip.basic }}</td>
+
+            <td>EPF</td>
+            <td class="right">{{ currency }}{{ payslip.epf }}</td>
+        </tr>
+
+        <tr>
+            <td>HRA</td>
+            <td class="right">{{ currency }}{{ payslip.hra }}</td>
+
+            <td>ESI</td>
+            <td class="right">{{ currency }}{{ payslip.esi }}</td>
+        </tr>
+
+        <tr>
+            <td>Conveyance Allowance</td>
+            <td class="right">{{ currency }}{{ payslip.conveyance_allowance }}</td>
+
+            <td>Professional Tax</td>
+            <td class="right">{{ currency }}{{ payslip.professional_tax }}</td>
+        </tr>
+
+        <tr>
+            <td>Medical Allowance</td>
+            <td class="right">{{ currency }}{{ payslip.medical_allowance }}</td>
+
+            <td></td>
+            <td></td>
+        </tr>
+
+        <tr>
+            <td>Other Allowances</td>
+            <td class="right">{{ currency }}{{ payslip.other_allowances }}</td>
+
+            <td></td>
+            <td></td>
+        </tr>
+
+        <tr class="bold">
+            <td>Total Earnings</td>
+            <td class="right">{{ currency }}{{ payslip.total_earnings }}</td>
+
+            <td>Total Deductions</td>
+            <td class="right">{{ currency }}{{ payslip.total_deductions }}</td>
+        </tr>
+
+        <tr class="bold">
+            <td colspan="3" class="right">Net Salary</td>
+            <td class="right">{{ currency }}{{ payslip.net_salary }}</td>
+        </tr>
+    </table>
+
+</div>
+
+</body>
+</html>

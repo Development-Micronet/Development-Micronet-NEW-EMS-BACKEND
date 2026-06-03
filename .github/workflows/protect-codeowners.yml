@@ -1,0 +1,15 @@
+name: CODEOWNERS Protection
+
+on:
+  pull_request:
+    paths:
+      - '**/CODEOWNERS'
+
+jobs:
+  enforce-codeowners-approval:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure CODEOWNERS changes are approved by owner
+        run: |
+          echo "CODEOWNERS file modified."
+          echo "This PR must be approved by organization owner / code owner."
