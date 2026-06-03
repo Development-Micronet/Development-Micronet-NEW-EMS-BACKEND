@@ -3,7 +3,7 @@ from datetime import date
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.db.models import ProtectedError, Q
-from django.http import Http404
+from django.http import Http404, JsonResponse
 from django.utils.decorators import method_decorator
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status
@@ -885,6 +885,15 @@ class EmployeeListAPIView(APIView):
     # allow file uploads (profile images) alongside JSON data
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
+    @staticmethod
+    def _json_headers():
+        return {
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Vary": "Authorization, Accept",
+        }
+
     @document_api(
         operation_description="Get full list of employees with optional search by name",
         tags=["Employee Management"],
@@ -926,7 +935,12 @@ class EmployeeListAPIView(APIView):
             many=True,
             context={"checked_in_employee_ids": checked_in_employee_ids},
         )
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return JsonResponse(
+            serializer.data,
+            safe=False,
+            status=status.HTTP_200_OK,
+            headers=self._json_headers(),
+        )
 
     @method_decorator(permission_required("employee.add_employee"))
     def post(self, request):

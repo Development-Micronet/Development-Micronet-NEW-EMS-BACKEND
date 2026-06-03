@@ -38,6 +38,7 @@ class EmployeeListAPITest(TestCase):
 
         assert response.status_code == 200
         assert response["Content-Type"].startswith("application/json")
+        assert "no-store" in response["Cache-Control"]
         assert len(response.json()) == 3
 
     def test_page_query_param_is_ignored_when_pagination_is_disabled(self):
