@@ -8,7 +8,6 @@ from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -104,10 +103,9 @@ class TagGetCreateAPIView(APIView):
 
     def get(self, request):
         tags = self.get_queryset()
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(tags, request)
+        page = list(tags)
         serializer = TagSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @permission_required("helpdesk.add_tag")
     def post(self, request):
@@ -132,10 +130,9 @@ class TicketTypeGetCreateAPIView(APIView):
 
     def get(self, request):
         ticket_types = self.get_queryset()
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(ticket_types, request)
+        page = list(ticket_types)
         serializer = TicketTypeSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @permission_required("helpdesk.add_tickettype")
     def post(self, request):
@@ -195,10 +192,9 @@ class FAQCategoryGetCreateAPIView(APIView):
     def get(self, request):
         faq_categories = self.get_queryset()
         filterset = self.filterset_class(request.GET, queryset=faq_categories)
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(filterset.qs, request)
+        page = list(filterset.qs)
         serializer = FAQCategorySerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @permission_required("helpdesk.add_faqcategory")
     def post(self, request):
@@ -261,10 +257,9 @@ class FAQGetCreateAPIView(APIView):
         else:
             faqs = self.get_queryset()
         filterset = self.filterset_class(request.GET, queryset=faqs)
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(filterset.qs, request)
+        page = list(filterset.qs)
         serializer = FAQSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @permission_required("helpdesk.add_faq")
     def post(self, request):
@@ -334,10 +329,9 @@ class TicketGetCreateAPIView(APIView):
         if field_name:
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, filterset.qs)
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(filterset.qs, request)
+        page = list(filterset.qs)
         serializer = TicketSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def _ticket_create_response(self, ticket):
         try:
@@ -476,10 +470,9 @@ class CommentGetCreateAPIView(APIView):
         if ticket is None:
             return Response({"error": "Ticket not found"}, status=404)
         comments = Comment.objects.filter(ticket_id=ticket_id)
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(comments, request)
+        page = list(comments)
         serializer = CommentSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def post(self, request, ticket_id):
         ticket = object_check(Ticket, ticket_id)
@@ -553,10 +546,9 @@ class AttachmentGetCreateAPIView(APIView):
             attachments = Attachment.objects.filter(comment_id=comment_id)
         else:
             return Response({"error": "ticket_id or comment_id required"}, status=400)
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(attachments, request)
+        page = list(attachments)
         serializer = AttachmentSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def post(self, request):
         serializer = AttachmentSerializer(data=request.data)
@@ -598,10 +590,9 @@ class ClaimRequestGetCreateAPIView(APIView):
             claim_requests = ClaimRequest.objects.filter(ticket_id=ticket_id)
         else:
             claim_requests = ClaimRequest.objects.all()
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(claim_requests, request)
+        page = list(claim_requests)
         serializer = ClaimRequestSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def post(self, request):
         serializer = ClaimRequestSerializer(data=request.data)
@@ -657,10 +648,9 @@ class DepartmentManagerGetCreateAPIView(APIView):
 
     def get(self, request):
         department_managers = self.get_queryset()
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(department_managers, request)
+        page = list(department_managers)
         serializer = DepartmentManagerSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @permission_required("helpdesk.add_departmentmanager")
     def post(self, request):

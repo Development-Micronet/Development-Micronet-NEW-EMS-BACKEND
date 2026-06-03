@@ -9,7 +9,6 @@ from django.contrib.auth.decorators import permission_required
 from django.db import IntegrityError, transaction
 from django.shortcuts import render
 from django.utils.decorators import method_decorator
-from rest_framework.pagination import PageNumberPagination
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -76,10 +75,9 @@ class PayslipView(APIView):
         if field_name:
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, payslip_filter_queryset)
-        pagination = PageNumberPagination()
-        page = pagination.paginate_queryset(payslip_filter_queryset, request)
+        page = list(payslip_filter_queryset)
         serializer = PayslipSerializer(page, many=True)
-        return pagination.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
 
 class PayslipDownloadView(APIView):
@@ -161,10 +159,9 @@ class PayslipNewView(APIView):
         if employee_id:
             payslips = payslips.filter(employee_id=employee_id)
 
-        pagination = PageNumberPagination()
-        page = pagination.paginate_queryset(payslips, request)
+        page = list(payslips)
         serializer = PayslipNewSerializer(page, many=True)
-        return pagination.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(permission_required("payroll.add_payslipnew"))
     def post(self, request):
@@ -309,10 +306,9 @@ class ContractView(APIView):
         if field_name:
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, filter_queryset)
-        pagination = PageNumberPagination()
-        page = pagination.paginate_queryset(filter_queryset, request)
+        page = list(filter_queryset)
         serializer = ContractSerializer(page, many=True)
-        return pagination.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(permission_required("payroll.add_contract"))
     def post(self, request):
@@ -349,10 +345,9 @@ class AllowanceView(APIView):
             return Response(serializer.data, status=200)
         allowance = Allowance.objects.all()
         filter_queryset = AllowanceFilter(request.GET, allowance).qs
-        pagination = PageNumberPagination()
-        page = pagination.paginate_queryset(filter_queryset, request)
+        page = list(filter_queryset)
         serializer = AllowanceSerializer(page, many=True)
-        return pagination.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(permission_required("payroll.add_allowance"))
     def post(self, request):
@@ -389,10 +384,9 @@ class DeductionView(APIView):
             return Response(serializer.data, status=200)
         deduction = Deduction.objects.all()
         filter_queryset = DeductionFilter(request.GET, deduction).qs
-        pagination = PageNumberPagination()
-        page = pagination.paginate_queryset(filter_queryset, request)
+        page = list(filter_queryset)
         serializer = DeductionSerializer(page, many=True)
-        return pagination.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(permission_required("payroll.add_deduction"))
     def post(self, request):
@@ -436,10 +430,9 @@ class LoanAccountView(APIView):
             serializer = LoanAccountSerializer(instance=loan_account)
             return Response(serializer.data, status=200)
         loan_accounts = LoanAccount.objects.all()
-        pagination = PageNumberPagination()
-        page = pagination.paginate_queryset(loan_accounts, request)
+        page = list(loan_accounts)
         serializer = LoanAccountSerializer(page, many=True)
-        return pagination.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(permission_required("payroll.change_loanaccount"))
     def put(self, request, pk):
@@ -474,10 +467,9 @@ class ReimbursementView(APIView):
             reimbursements = Reimbursement.objects.filter(
                 employee_id=request.user.employee_get
             )
-        pagination = PageNumberPagination()
-        page = pagination.paginate_queryset(reimbursements, request)
+        page = list(reimbursements)
         serializer = self.serializer_class(page, many=True)
-        return pagination.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def post(self, request):
         serializer = self.serializer_class(

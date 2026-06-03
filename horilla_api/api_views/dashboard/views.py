@@ -9,7 +9,6 @@ from django.db.models import Avg, Count, Q, Sum
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from rest_framework import status
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -37,14 +36,6 @@ from ...api_serializers.dashboard.serializers import (
     LeaveRequestBasicSerializer,
 )
 from ...docs import document_api
-
-
-class StandardResultsSetPagination(PageNumberPagination):
-    """Standard pagination for API responses"""
-
-    page_size = 20
-    page_size_query_param = "page_size"
-    max_page_size = 100
 
 
 class DashboardOverviewAPIView(APIView):

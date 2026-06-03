@@ -2,7 +2,6 @@ from collections import Counter
 
 from django.db.models import Q
 from django.http import QueryDict
-from rest_framework.pagination import PageNumberPagination
 
 from employee.models import EmployeeWorkInformation
 
@@ -40,9 +39,8 @@ def groupby_queryset(request, url, field_name, queryset):
                     "filter_url": f"{url}&{field_name}={item[field_name]}",
                 }
             )
-    pagination = PageNumberPagination()
-    page = pagination.paginate_queryset(counts_and_objects, request)
-    return pagination.get_paginated_response(page)
+    from rest_framework.response import Response
+    return Response(counts_and_objects)
 
 
 def permission_based_queryset(user, perm, queryset, user_obj=None):

@@ -6,7 +6,6 @@ from django.db.models import Count
 from django.http import Http404, QueryDict
 from django.utils.decorators import method_decorator
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -29,10 +28,9 @@ class EmployeeAvailableLeaveGetAPIView(APIView):
     def get(self, request):
         employee = request.user.employee_get
         available_leave = employee.available_leave.all()
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(available_leave, request)
+        page = list(available_leave)
         serializer = GetAvailableLeaveTypeSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
 
 class EmployeeLeaveRequestGetCreateAPIView(APIView):
@@ -54,14 +52,13 @@ class EmployeeLeaveRequestGetCreateAPIView(APIView):
         employee = request.user.employee_get
         leave_request = employee.leaverequest_set.all().order_by("-id")
         filterset = self.filterset_class(request.GET, queryset=leave_request)
-        paginator = PageNumberPagination()
         field_name = request.GET.get("groupby_field", None)
         if field_name:
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, filterset.qs)
-        page = paginator.paginate_queryset(filterset.qs, request)
+        page = list(filterset.qs)
         serializer = userLeaveRequestGetAllSerilaizer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def post(self, request):
         employee_id = request.user.employee_get.id
@@ -188,10 +185,9 @@ class LeaveTypeGetCreateAPIView(APIView):
     def get(self, request):
         leave_type = LeaveType.objects.all()
         filterset = self.filterset_class(request.GET, queryset=leave_type)
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(filterset.qs, request)
+        page = list(filterset.qs)
         serializer = LeaveTypeAllGetSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(
         permission_required("leave.add_leavetype", raise_exception=True),
@@ -275,14 +271,13 @@ class LeaveAllocationRequestGetCreateAPIView(APIView):
             request, allocation_requests, "leave.view_leaveallocationrequest"
         )
         filterset = self.filterset_class(request.GET, queryset=queryset)
-        paginator = PageNumberPagination()
         field_name = request.GET.get("groupby_field", None)
         if field_name:
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, filterset.qs)
-        page = paginator.paginate_queryset(filterset.qs, request)
+        page = list(filterset.qs)
         serializer = LeaveAllocationRequestGetSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def post(self, request):
         data = request.data
@@ -380,14 +375,13 @@ class AssignLeaveGetCreateAPIView(APIView):
             request, available_leave, "leave.view_availableleave"
         )
         filterset = self.filterset_class(request.GET, queryset=queryset)
-        paginator = PageNumberPagination()
         field_name = request.GET.get("groupby_field", None)
         if field_name:
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, filterset.qs)
-        page = paginator.paginate_queryset(filterset.qs, request)
+        page = list(filterset.qs)
         serializer = AssignLeaveGetSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(
         permission_required("leave.add_availableleave", raise_exception=True),
@@ -493,16 +487,15 @@ class LeaveRequestGetCreateAPIView(APIView):
             | multiple_approvals
         )
         filterset = self.filterset_class(request.GET, queryset=queryset)
-        paginator = PageNumberPagination()
         field_name = request.GET.get("groupby_field", None)
         if field_name:
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, filterset.qs)
-        page = paginator.paginate_queryset(filterset.qs, request)
+        page = list(filterset.qs)
         serializer = LeaveRequestGetAllSerilaizer(
             page, context={"request": request}, many=True
         )
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @manager_permission_required("leave.add_leaverequest")
     def post(self, request):
@@ -623,10 +616,9 @@ class CompanyLeaveGetCreateAPIView(APIView):
     )
     def get(self, request):
         company_leave = CompanyLeave.objects.all().order_by("-id")
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(company_leave, request)
+        page = list(company_leave)
         serializer = CompanyLeaveSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(
         permission_required("leave.add_companyleave", raise_exception=True),
@@ -688,10 +680,9 @@ class HolidayGetCreateAPIView(APIView):
     )
     def get(self, request):
         holiday = Holiday.objects.all().order_by("-id")
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(holiday, request)
+        page = list(holiday)
         serializer = HoildaySerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(
         permission_required("leave.add_holiday", raise_exception=True), name="dispatch"
@@ -1034,14 +1025,13 @@ class EmployeeLeaveAllocationGetCreateAPIView(APIView):
         employee = self.get_user(request).employee_get
         allocation_requests = employee.leaveallocationrequest_set.all().order_by("-id")
         filterset = self.filterset_class(request.GET, queryset=allocation_requests)
-        paginator = PageNumberPagination()
         field_name = request.GET.get("groupby_field", None)
         if field_name:
             url = request.build_absolute_uri()
             return groupby_queryset(request, url, field_name, filterset.qs)
-        page = paginator.paginate_queryset(filterset.qs, request)
+        page = list(filterset.qs)
         serializer = LeaveAllocationRequestGetSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def post(self, request):
         data = request.data
@@ -1130,10 +1120,9 @@ class EmployeeAvailableLeaveTypeGetAPIView(APIView):
         available_leave = employee.available_leave.all()
         leave_type_ids = available_leave.values_list("leave_type_id", flat=True)
         leave_types = LeaveType.objects.filter(id__in=leave_type_ids)
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(leave_types, request)
+        page = list(leave_types)
         serializer = LeaveTypeAllGetSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
 
 class LeaveTypeGetPermissionCheckAPIView(APIView):

@@ -1,4 +1,3 @@
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -27,10 +26,9 @@ class DisciplinaryActionView(APIView):
             serializer = DisciplinaryActionSerializer(action)
             return Response(serializer.data, status=200)
         actions = DisciplinaryAction.objects.all()
-        paginater = PageNumberPagination()
-        page = paginater.paginate_queryset(actions, request)
+        page = list(actions)
         serializer = DisciplinaryActionSerializer(page, many=True)
-        return paginater.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def put(self, request, pk):
         action = DisciplinaryAction.objects.filter(id=pk).first()
@@ -67,7 +65,6 @@ from typing import Any
 from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -181,10 +178,9 @@ class JobPositionView(APIView):
             return Response(serializer.data, status=200)
 
         job_positions = JobPosition.objects.all()
-        paginater = PageNumberPagination()
-        page = paginater.paginate_queryset(job_positions, request)
+        page = list(job_positions)
         serializer = self.serializer_class(page, many=True)
-        return paginater.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(permission_required("base.change_jobposition"))
     def put(self, request, pk):
@@ -228,10 +224,9 @@ class DepartmentView(APIView):
             return Response(serializer.data, status=200)
 
         departments = Department.objects.all()
-        paginator = PageNumberPagination()
         page: list[Any] | None = paginator.paginate_queryset(departments, request)
         serializer = self.serializer_class(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(permission_required("base.change_department"), name="dispatch")
     def put(self, request, pk):
@@ -275,10 +270,9 @@ class JobRoleView(APIView):
             return Response(serializer.data, status=200)
 
         job_roles = JobRole.objects.all()
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(job_roles, request)
+        page = list(job_roles)
         serializer = self.serializer_class(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(permission_required("base.change_jobrole"), name="dispatch")
     def put(self, request, pk):
@@ -322,10 +316,9 @@ class CompanyView(APIView):
             return Response(serializer.data, status=200)
 
         companies = Company.objects.all()
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(companies, request)
+        page = list(companies)
         serializer = self.serializer_class(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @method_decorator(permission_required("base.change_company"), name="dispatch")
     def put(self, request, pk):
@@ -464,8 +457,7 @@ class WorkTypeRequestView(APIView):
                 request, url, field_name, work_type_request_filter_queryset
             )
         # pagination workflow
-        paginater = PageNumberPagination()
-        page = paginater.paginate_queryset(work_type_request_filter_queryset, request)
+        page = list(work_type_request_filter_queryset)
         serializer = self.serializer_class(page, many=True)
         # For each item, add custom fields and comments
         results = []
@@ -489,7 +481,7 @@ class WorkTypeRequestView(APIView):
                     "comments": comment_serializer.data,
                 }
             )
-        return paginater.get_paginated_response(results)
+        return Response(results)
 
     def post(self, request):
         serializer = self.serializer_class(data=request.data)
@@ -647,10 +639,9 @@ class IndividualRotatingWorktypesView(APIView):
         rotating_work_type_assigns = RotatingWorkTypeAssign.objects.filter(
             employee_id=employee_id
         )
-        pagenation = PageNumberPagination()
-        page = pagenation.paginate_queryset(rotating_work_type_assigns, request)
+        page = list(rotating_work_type_assigns)
         serializer = self.serializer_class(page, many=True)
-        return pagenation.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
 
 class RotatingWorkTypeAssignView(APIView):
@@ -694,12 +685,11 @@ class RotatingWorkTypeAssignView(APIView):
                 request, url, field_name, rotating_work_type_assigns_filter_queryset
             )
 
-        pagenation = PageNumberPagination()
         page = pagenation.paginate_queryset(
             rotating_work_type_assigns_filter_queryset, request
         )
         serializer = self.serializer_class(page, many=True)
-        return pagenation.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     @manager_permission_required("base.add_rotatingworktypeassign")
     def post(self, request):
@@ -1432,11 +1422,6 @@ from bs4 import BeautifulSoup
 from django.db.models import Q
 
 from base.models import Announcement, AnnouncementExpire
-
-
-class AnnouncementPagination(PageNumberPagination):
-    page_size_query_param = "page_size"  # allow client to override
-    max_page_size = 100  # prevent abuse
 
 
 class AnnouncementListAPIView(APIView):

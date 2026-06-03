@@ -29,6 +29,7 @@ from leave import views as leave_views
 from . import settings
 
 
+
 def health_check(request):
     return JsonResponse({"status": "ok"}, status=200)
 
