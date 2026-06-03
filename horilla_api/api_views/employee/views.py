@@ -228,7 +228,13 @@ class AuthenticatedEmployeeListAPIView(APIView):
 
         employees_queryset = employees_queryset.order_by("id")
         serializer = EmployeeListSerializer(employees_queryset, many=True)
-        return Response(serializer.data)
+        response_data = {
+            "count": len(serializer.data),
+            "next": None,
+            "previous": None,
+            "results": serializer.data,
+        }
+        return Response(response_data)
 
 
 class EmployeeTypeAPIView(APIView):
@@ -831,8 +837,14 @@ class EmployeeListAPIView(APIView):
             many=True,
             context={"checked_in_employee_ids": checked_in_employee_ids},
         )
+        response_data = {
+            "count": len(serializer.data),
+            "next": None,
+            "previous": None,
+            "results": serializer.data,
+        }
         return JsonResponse(
-            serializer.data,
+            response_data,
             safe=False,
             status=status.HTTP_200_OK,
             headers=self._json_headers(),
