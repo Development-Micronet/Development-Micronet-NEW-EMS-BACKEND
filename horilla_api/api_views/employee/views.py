@@ -216,21 +216,19 @@ def object_delete(cls, pk):
 
 class AuthenticatedEmployeeListAPIView(APIView):
     """
-    Returns only the authenticated user's employee record.
+    Returns all employees.
     """
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
-        employee = getattr(user, "employee_get", None)
-        if employee:
-            serializer = EmployeeListSerializer([employee], many=True)
-            return Response(
-                {"count": 1, "next": None, "previous": None, "results": serializer.data}
-            )
-        else:
-            return Response({"count": 0, "next": None, "previous": None, "results": []})
+        employees_queryset = Employee.objects.all()
+        if any(field.name == "is_deleted" for field in Employee._meta.fields):
+            employees_queryset = employees_queryset.filter(is_deleted=False)
+
+        employees_queryset = employees_queryset.order_by("id")
+        serializer = EmployeeListSerializer(employees_queryset, many=True)
+        return Response(serializer.data)
 
 
 class EmployeeTypeAPIView(APIView):
