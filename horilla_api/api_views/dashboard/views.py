@@ -202,7 +202,6 @@ class EmployeeListAPIView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    pagination_class = StandardResultsSetPagination
 
     @document_api(
         operation_description="Get list of all active employees with basic information, filters for department/company/status and search by name/email",
@@ -231,12 +230,8 @@ class EmployeeListAPIView(APIView):
                     | Q(badge_id__icontains=search)
                 )
 
-            # Pagination
-            paginator = self.pagination_class()
-            paginated = paginator.paginate_queryset(employees, request)
-
-            serializer = EmployeeComprehensiveSerializer(paginated, many=True)
-            return paginator.get_paginated_response(serializer.data)
+            serializer = EmployeeComprehensiveSerializer(employees, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -276,7 +271,6 @@ class AttendanceListAPIView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    pagination_class = StandardResultsSetPagination
 
     @document_api(
         operation_description="Get list of attendance records with optional filters by date range, employee, and status, with pagination",
@@ -317,16 +311,12 @@ class AttendanceListAPIView(APIView):
                         attendance_validated=False
                     )
 
-            # Pagination
-            paginator = self.pagination_class()
-            paginated = paginator.paginate_queryset(attendance_records, request)
-
             from ...api_serializers.dashboard.serializers import (
                 AttendanceListSerializer,
             )
 
-            serializer = AttendanceListSerializer(paginated, many=True)
-            return paginator.get_paginated_response(serializer.data)
+            serializer = AttendanceListSerializer(attendance_records, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -339,7 +329,6 @@ class LeaveRequestListAPIView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    pagination_class = StandardResultsSetPagination
 
     @document_api(
         operation_description="Get list of leave requests with optional filters by status, employee, and leave type, with pagination",
@@ -364,12 +353,8 @@ class LeaveRequestListAPIView(APIView):
             if leave_type:
                 leave_requests = leave_requests.filter(leave_type_id__id=leave_type)
 
-            # Pagination
-            paginator = self.pagination_class()
-            paginated = paginator.paginate_queryset(leave_requests, request)
-
-            serializer = LeaveRequestBasicSerializer(paginated, many=True)
-            return paginator.get_paginated_response(serializer.data)
+            serializer = LeaveRequestBasicSerializer(leave_requests, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -559,7 +544,6 @@ class ActivitiesListAPIView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    pagination_class = StandardResultsSetPagination
 
     @document_api(
         operation_description="Get recent attendance activities (clock-in, clock-out) for a specified number of days with pagination",
@@ -577,12 +561,8 @@ class ActivitiesListAPIView(APIView):
             date_from = date.today() - timedelta(days=days)
             activities = activities.filter(activity_date__gte=date_from)
 
-            # Pagination
-            paginator = self.pagination_class()
-            paginated = paginator.paginate_queryset(activities, request)
-
-            serializer = ActivitySerializer(paginated, many=True)
-            return paginator.get_paginated_response(serializer.data)
+            serializer = ActivitySerializer(activities, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR

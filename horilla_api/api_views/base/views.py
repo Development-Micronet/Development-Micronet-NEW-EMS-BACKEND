@@ -762,10 +762,8 @@ class IndividualWorkTypeRequestView(APIView):
             return Response(serializer.data, status=200)
         employee_id = request.GET.get("employee_id", None)
         work_type_request = WorkTypeRequest.objects.filter(employee_id=employee_id)
-        paginater = PageNumberPagination()
-        page = paginater.paginate_queryset(work_type_request, request)
-        serializer = self.serializer_class(page, many=True)
-        return paginater.get_paginated_response(serializer.data)
+        serializer = self.serializer_class(work_type_request, many=True)
+        return Response(serializer.data, status=200)
 
 
 class EmployeeShiftView(APIView):
@@ -940,10 +938,8 @@ class IndividualRotatingShiftView(APIView):
             employee_id=employee_id
         )
 
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(rotating_shift_assigns, request)
-        serializer = self.serializer_class(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        serializer = self.serializer_class(rotating_shift_assigns, many=True)
+        return Response(serializer.data, status=200)
 
 
 class RotatingShiftAssignView(APIView):
@@ -1039,10 +1035,8 @@ class IndividualShiftRequestView(APIView):
             return Response(serializer.data, status=200)
         employee_id = request.GET.get("employee_id", None)
         shift_requests = ShiftRequest.objects.filter(employee_id=employee_id)
-        paginater = PageNumberPagination()
-        page = paginater.paginate_queryset(shift_requests, request)
-        serializer = self.serializer_class(page, many=True)
-        return paginater.get_paginated_response(serializer.data)
+        serializer = self.serializer_class(shift_requests, many=True)
+        return Response(serializer.data, status=200)
 
 
 class ShiftRequestView(APIView):
@@ -1083,11 +1077,8 @@ class ShiftRequestView(APIView):
             return groupby_queryset(
                 request, url, field_name, shift_requests_filter_queryset
             )
-        # pagination section
-        paginator = PageNumberPagination()
-        page = paginator.paginate_queryset(shift_requests_filter_queryset, request)
-        serializer = self.serializer_class(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        serializer = self.serializer_class(shift_requests_filter_queryset, many=True)
+        return Response(serializer.data, status=200)
 
     def post(self, request):
         serializer = self.serializer_class(data=request.data)
@@ -1459,7 +1450,6 @@ class AnnouncementListAPIView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
-    pagination_class = AnnouncementPagination
 
     def get(self, request, *args, **kwargs):
         # Default expire days
@@ -1507,10 +1497,7 @@ class AnnouncementListAPIView(APIView):
             for ann in announcements
         ]
 
-        # Apply pagination
-        paginator = self.pagination_class()
-        page = paginator.paginate_queryset(data, request)
-        return paginator.get_paginated_response(page)
+        return Response(data, status=200)
 
     @staticmethod
     def _parse_description(description: str) -> list[dict]:
