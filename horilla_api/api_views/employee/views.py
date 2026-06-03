@@ -891,7 +891,6 @@ class EmployeeListAPIView(APIView):
     )
     def get(self, request):
         search = request.query_params.get("search")
-        print("helloo form emp")
         # 🔹 Exclude soft deleted employees
         employees_queryset = Employee.objects.get_queryset()
         if any(field.name == "is_deleted" for field in Employee._meta.fields):
